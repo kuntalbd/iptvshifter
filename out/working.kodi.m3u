@@ -1,0 +1,8 @@
+#EXTM3U
+# === Other ===
+#EXTINF:-1 tvg-name="Ok" group-title="Other",Ok
+#KODIPROP:inputstream.adaptive.stream_headers=
+http://example.com/ok/stream.m3u8
+#EXTINF:-1 tvg-name="Rtmp" group-title="Other",Rtmp
+#KODIPROP:inputstream.adaptive.stream_headers=
+rtmp://example.com/live/foo

@@ -1,0 +1,6 @@
+#EXTM3U
+# === Other ===
+#EXTINF:-1 tvg-name="Ok" group-title="Other",Ok
+http://example.com/ok/stream.m3u8
+#EXTINF:-1 tvg-name="Rtmp" group-title="Other",Rtmp
+rtmp://example.com/live/foo

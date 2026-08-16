@@ -20,8 +20,11 @@ prod/data/
 backups/
 **/backups/
 
-# ---- Generated output playlists (user's private channels) ----
-out/
+# ---- Generated output playlists ----
+# IMPORTANT: the repo-root `out/` IS the public, intentionally-published
+# playlist folder (copied from prod/out after a run fully completes). It is
+# tracked on purpose. Only the PRIVATE locations are ignored.
+out/.publish.lock
 prod/out/
 output/
 playlists/
