@@ -34,7 +34,6 @@ validation:
   follow_redirects: true
   max_redirects: 5
   verify_ssl: true
-  token_refresh: true                  # C1 HYBRID: re-extract fresh token on 403 of tokened URL (OFF in Quick mode)
   max_token_refetch_per_feed: 1        # cap remote re-fetches per source feed per run (thundering-herd guard)
   strip_query_params:               # rotating-token params stripped from DEDUPE KEY only
     # MUST stay in sync with parser.py ROTATING_TOKEN_PARAMS (single source of truth)

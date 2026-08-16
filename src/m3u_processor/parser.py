@@ -257,8 +257,8 @@ def merge_into_db(db, streams, run_id="", allow_multi_token=True):
             db.execute(
                 """INSERT INTO streams
                    (url, original_url, name, provider_domain, source_type, source_path,
-                    extinf_raw, attributes, first_seen, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
+                    source, is_url, extinf_raw, attributes, first_seen, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
                 (
                     norm,
                     s.original_url,
@@ -266,6 +266,8 @@ def merge_into_db(db, streams, run_id="", allow_multi_token=True):
                     s.provider_domain,
                     s.source_type,
                     s.source_path,
+                    s.source_path,                # source = specific feed URL or local path
+                    1 if s.source_type == "remote" else 0,
                     s.extinf_raw,
                     __import__("json").dumps(s.attributes),
                 ),
@@ -312,8 +314,8 @@ def merge_into_db(db, streams, run_id="", allow_multi_token=True):
             db.execute(
                 """INSERT INTO streams
                    (url, original_url, name, provider_domain, source_type, source_path,
-                    extinf_raw, attributes, first_seen, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
+                    source, is_url, extinf_raw, attributes, first_seen, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
                 (
                     norm + "|" + uuid.uuid4().hex,
                     s.original_url,
@@ -321,6 +323,8 @@ def merge_into_db(db, streams, run_id="", allow_multi_token=True):
                     s.provider_domain,
                     s.source_type,
                     s.source_path,
+                    s.source_path,
+                    1 if s.source_type == "remote" else 0,
                     s.extinf_raw,
                     __import__("json").dumps(s.attributes),
                 ),

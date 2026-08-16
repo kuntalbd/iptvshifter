@@ -108,6 +108,10 @@ def create_app(cfg):
                                    stats=dict(stats), last_run=last_run,
                                    last_refresh_at=last_refresh))
 
+    @app.get("/favorites", response_class=HTMLResponse)
+    def page_favorites():
+        return HTMLResponse(render("favorites.html"))
+
     @app.get("/streams", response_class=HTMLResponse)
     def page_streams():
         return HTMLResponse(render("streams.html"))
@@ -132,6 +136,22 @@ def create_app(cfg):
     def page_runs():
         return HTMLResponse(render("runs.html", cfg=cfg.data))
 
+    @app.get("/errors", response_class=HTMLResponse)
+    def page_errors():
+        return HTMLResponse(render("errors.html", cfg=cfg.data))
+
+    @app.get("/api/run-errors")
+    def api_run_errors(run_id: str = None, limit: int = 200):
+        db = _get_db(cfg)
+        try:
+            rows = db.get_run_errors(run_id=run_id, limit=limit)
+            return {"errors": [
+                {"id": r["id"], "run_id": r["run_id"], "occurred_at": r["occurred_at"],
+                 "error_type": r["error_type"], "message": r["message"], "source": r["source"]}
+                for r in rows]}
+        finally:
+            db.close()
+
     @app.get("/schedules", response_class=HTMLResponse)
     def page_schedules():
         return HTMLResponse(render("schedules.html", cfg=cfg.data))
@@ -149,7 +169,7 @@ def create_app(cfg):
                 "FROM runs WHERE status='running' ORDER BY started_at DESC LIMIT 1"
             )
             if not row:
-                return {"active": False}
+                return {"is_run_active": False}
             r = row[0]
             prog = {}
             try:
@@ -157,7 +177,7 @@ def create_app(cfg):
             except Exception:
                 prog = {}
             return {
-                "active": True,
+                "is_run_active": True,
                 "run_id": r["run_id"],
                 "mode": r["mode"],
                 "started_at": r["started_at"],
@@ -177,7 +197,7 @@ def create_app(cfg):
                 "WHERE status='running' ORDER BY started_at DESC LIMIT 1"
             )
             if not row:
-                return {"active": False}
+                return {"is_run_active": False}
             r = row[0]
             pid = None
             try:
@@ -185,7 +205,7 @@ def create_app(cfg):
             except Exception:
                 pid = None
             alive = bool(pid) and _pid_alive(pid)
-            return {"active": alive, "run_id": r["run_id"], "mode": r["mode"],
+            return {"is_run_active": alive, "run_id": r["run_id"], "mode": r["mode"],
                     "started_at": r["started_at"]}
         finally:
             db.close()
@@ -409,7 +429,8 @@ def create_app(cfg):
                 wheres.append("(name LIKE ? OR url LIKE ?)")
                 params.extend([f"%{q}%", f"%{q}%"])
             sql = ("SELECT id, name, url, original_url, provider_domain, blacklist_tier, "
-                   "is_working, health_tier, health_score, last_checked FROM streams WHERE "
+                   "is_working, health_tier, health_score, last_checked, "
+                   "last_working, total_failures, consecutive_failures FROM streams WHERE "
                    + " AND ".join(wheres) +
                    " ORDER BY id LIMIT ? OFFSET ?")
             params.extend([limit, offset])
@@ -461,7 +482,6 @@ def create_app(cfg):
             job = next((j for j in jobs if j.get("name") == job_name), None)
             if job:
                 mode = job.get("mode", mode)
-        token_refresh = body.get("token_refresh")
         q = queue.Queue()
 
         def progress(done, total):
@@ -482,7 +502,7 @@ def create_app(cfg):
             orch = Orchestrator(db, cfg)
             orch.progress = progress
             try:
-                stats = orch.run(mode=mode, token_refresh=token_refresh, run_id=run_id)
+                stats = orch.run(mode=mode, run_id=run_id)
                 if stats.get("discarded"):
                     q.put({"type": "discarded",
                            "reason": stats.get("discard_reason", "another run active"),
@@ -519,6 +539,219 @@ def create_app(cfg):
                     break
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    # ---------- favorites subsystem ----------
+    @app.get("/api/favorite-groups")
+    def api_favorite_groups():
+        db = _get_db(cfg)
+        try:
+            return [{"id": r["id"], "name": r["name"]} for r in db.favorite_groups()]
+        finally:
+            db.close()
+
+    @app.get("/api/favorites")
+    def api_favorites(group: str = "", working: str = "", q: str = ""):
+        db = _get_db(cfg)
+        try:
+            rows = db.favorite_list(group=group, working=working, q=q)
+            out = []
+            for r in rows:
+                out.append({
+                    "id": r["id"], "name": r["name"], "url": r["url"],
+                    "origin_url": r["origin_url"], "groups": r["groups"] or "",
+                    "is_enabled": bool(r["is_enabled"]),
+                    "is_working": r["is_working"],
+                    "last_working": r["last_working"],
+                    "total_failures": r["total_failures"],
+                    "consecutive_failures": r["consecutive_failures"],
+                    "total_successes": r["total_successes"],
+                    "token_refresh_enabled": bool(r["token_refresh_enabled"]),
+                })
+            return out
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/add")
+    async def api_favorites_add(req: Request):
+        body = await req.json()
+        db = _get_db(cfg)
+        try:
+            fid = db.favorite_add(
+                name=body.get("name", ""),
+                url=body["url"],
+                origin_url=body.get("origin_url", ""),
+                group_title=body.get("group", ""),
+                token_refresh_enabled=bool(body.get("token_refresh_enabled", False)),
+            )
+            if body.get("group"):
+                db.favorite_set_group([fid], body["group"])
+            return {"ok": True, "id": fid}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/add-existing")
+    async def api_favorites_add_existing(req: Request):
+        body = await req.json()
+        db = _get_db(cfg)
+        try:
+            fid = db.favorite_add_existing(
+                stream_url=body["url"],
+                name=body.get("name", ""),
+                group_title=body.get("group", ""),
+                token_refresh_enabled=bool(body.get("token_refresh_enabled", False)),
+            )
+            if fid and body.get("group"):
+                db.favorite_set_group([fid], body["group"])
+            return {"ok": True, "id": fid} if fid else {"ok": False, "error": "stream not found"}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/delete")
+    async def api_favorites_delete(req: Request):
+        body = await req.json()
+        db = _get_db(cfg)
+        try:
+            db.favorite_delete(body["id"])
+            return {"ok": True}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/set-enabled")
+    async def api_favorites_set_enabled(req: Request):
+        body = await req.json()
+        db = _get_db(cfg)
+        try:
+            db.favorite_set_enabled(body["id"], bool(body.get("enabled", True)))
+            return {"ok": True}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/set-group")
+    async def api_favorites_set_group(req: Request):
+        body = await req.json()
+        fids = body.get("ids", [])
+        group = body.get("group", "")
+        if not group:
+            return {"ok": False, "error": "group required"}
+        db = _get_db(cfg)
+        try:
+            db.favorite_set_group(fids, group)
+            return {"ok": True}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/validate-now")
+    def api_favorites_validate_now():
+        """Validate all favorites (separate from main pipeline runs)."""
+        db = _get_db(cfg)
+        try:
+            rows = db.query(
+                "SELECT id, url, origin_url FROM favorites WHERE is_enabled=1")
+            if not rows:
+                return {"ok": True, "checked": 0}
+            from ..validator import StreamValidator
+            validator = StreamValidator(cfg)
+            checked = 0
+            for r in rows:
+                # Validate the PLAYABLE url (may carry a token) — that is what
+                # must actually be reachable. Validation is internal (no publish),
+                # so using the tokened url is correct here.
+                url = r["url"] or r["origin_url"]
+                res = validator.validate_one(
+                    type("S", (), {"url": url, "original_url": url,
+                                  "attributes": {}})())
+                if res.uncheckable:
+                    # Non-http scheme (rtmp/rtsp/etc): can't validate over HTTP.
+                    # Leave status untouched — do NOT count as a failure.
+                    checked += 1
+                    continue
+                db.favorite_record_result(r["id"], res.ok)
+                checked += 1
+            db.close()
+            return {"ok": True, "checked": checked}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.post("/api/favorites/export")
+    async def api_favorites_export(req: Request):
+        """Generate favorite.*.m3u into prod/out, copy to out/, push to GitHub."""
+        body = await req.json()
+        include_disabled = bool(body.get("include_disabled", False))
+        include_notworking = bool(body.get("include_notworking", False))
+        formats = body.get("formats", ["vlc", "kodi", "tivimate"])
+        db = _get_db(cfg)
+        try:
+            sql = ("SELECT f.name, f.url, f.origin_url, "
+                   "GROUP_CONCAT(g.name) AS groups "
+                   "FROM favorites f "
+                   "LEFT JOIN favorite_membership m ON m.favorite_id=f.id "
+                   "LEFT JOIN favorite_groups g ON g.id=m.group_id WHERE 1")
+            if not include_disabled:
+                sql += " AND is_enabled=1"
+            if not include_notworking:
+                sql += " AND is_working=1"
+            rows = db.query(sql)
+            if not rows:
+                return {"ok": False, "error": "no favorites to export"}
+            # Build M3U directly (favorites are simple url+name; no need for the
+            # full Stream-oriented write_streams which expects attributes/health).
+            # SECURITY: prefer origin_url (tokenless) so we never publish a
+            # tokened playable URL to the (possibly public) GitHub repo.
+            entries = []
+            for r in rows:
+                name = r["name"] or r["url"]
+                group = (r["groups"] or "").split(",")[0].strip() or ""
+                play_url = r["origin_url"] or r["url"]
+                entries.append((name, play_url, group))
+            outdir = cfg.get("output.dir", "./out")
+            os.makedirs(outdir, exist_ok=True)
+            results = {}
+            for fmt in formats:
+                if fmt == "vlc":
+                    lines = ["#EXTM3U"]
+                    for name, url, _ in entries:
+                        lines.append(f"#EXTINF:-1,{name}")
+                        lines.append(url)
+                    path = os.path.join(outdir, "favorite.m3u")
+                elif fmt == "kodi":
+                    lines = ["#EXTM3U"]
+                    for name, url, _ in entries:
+                        lines.append(f'#EXTINF:-1 tvg-name="{name}",{name}')
+                        lines.append(url)
+                    path = os.path.join(outdir, "favorite.kodi.m3u")
+                elif fmt == "tivimate":
+                    lines = ["#EXTM3U"]
+                    for name, url, _ in entries:
+                        lines.append(f"#EXTINF:-1 group-title=\"{_}\",{name}")
+                        lines.append(url + (f"|group-title={_}" if _ else ""))
+                    path = os.path.join(outdir, "favorite.tivimate.m3u")
+                else:
+                    continue
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
+                results[fmt] = path
+            # Copy to repo out/ and push (same helper as main publish)
+            pub = cfg.get("publish") or {}
+            target = pub.get("target_dir", "../out")
+            if not os.path.isabs(target):
+                base_dir = getattr(cfg, "config_dir", "") or os.getcwd()
+                dst = os.path.normpath(os.path.join(base_dir, target))
+            else:
+                dst = target
+            import shutil
+            os.makedirs(dst, exist_ok=True)
+            for path in results.values():
+                shutil.copy2(path, os.path.join(dst, os.path.basename(path)))
+            from .. import publish as _publish
+            pub_result = _publish.publish_outputs(cfg, run_id="favorites-export")
+            return {"ok": True, "files": results,
+                    "published": pub_result.get("published", False)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            db.close()
 
     @app.post("/api/generate")
     async def api_generate(req: Request):

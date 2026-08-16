@@ -32,10 +32,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--feed-file", help="Path to feeds.txt")
     p.add_argument("--playlist-dir", help="Path to local playlist dir")
     p.add_argument("--output-dir", help="Path to output dir")
-    p.add_argument("--no-token-refresh", action="store_true",
-                   help="Disable stale-token re-extraction (fast path)")
-    p.add_argument("--token-refresh", action="store_true",
-                   help="Force stale-token re-extraction ON")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("-q", "--quiet", action="store_true")
     p.add_argument("--json-logs", action="store_true")
@@ -49,8 +45,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--workers", type=int)
     run_p.add_argument("--timeout", type=int)
     run_p.add_argument("--resume", action="store_true")
-    run_p.add_argument("--no-token-refresh", action="store_true")
-    run_p.add_argument("--token-refresh", action="store_true")
 
     sub.add_parser("init-db", help="Initialize the database schema")
     sub.add_parser("vacuum", help="VACUUM the database")
@@ -96,8 +90,6 @@ def _cli_overrides(args) -> dict:
     if args.output_dir: o["output.dir"] = args.output_dir
     if getattr(args, "workers", None): o["validation.workers"] = args.workers
     if getattr(args, "mode", None): o["validation.mode"] = args.mode
-    if getattr(args, "no_token_refresh", False): o["validation.token_refresh"] = False
-    if getattr(args, "token_refresh", False): o["validation.token_refresh"] = True
     return o
 
 
@@ -177,12 +169,7 @@ def main(argv=None):
             mode = job.get("mode", "quick")
         if not mode:
             mode = cfg.get("validation.mode", "quick")
-        token_refresh = None
-        if getattr(args, "no_token_refresh", False):
-            token_refresh = False
-        elif getattr(args, "token_refresh", False):
-            token_refresh = True
-        stats = orch.run(mode=mode, token_refresh=token_refresh)
+        stats = orch.run(mode=mode)
         print(json.dumps(stats, indent=2))
         db.close()
         return 0

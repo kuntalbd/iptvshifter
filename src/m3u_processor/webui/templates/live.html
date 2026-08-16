@@ -16,7 +16,7 @@ function fmtElapsed(start){
 }
 function render(d){
   const el=document.getElementById("live");
-  if(!d.active){
+  if(!d.is_run_active){
     el.innerHTML=`<div class="card"><div class="num">idle</div>
       <div class="lb">No active run right now.</div></div>
       <p class="muted">Runs triggered by the scheduler or the Run page appear here automatically.</p>`;

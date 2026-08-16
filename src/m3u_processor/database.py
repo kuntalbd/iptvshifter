@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS streams (
     provider_domain TEXT NOT NULL,
     source_type TEXT NOT NULL,
     source_path TEXT,
+    source TEXT,                -- specific source: remote feed URL or local playlist path (NOT feeds.txt)
+    is_url BOOLEAN DEFAULT 0,   -- 1 if `source` is a remote URL, 0 if local file
     extinf_raw TEXT,
     attributes JSON,
     is_working BOOLEAN DEFAULT NULL,
@@ -82,6 +84,17 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 """
 
+RUN_ERRORS_DDL = """
+CREATE TABLE IF NOT EXISTS run_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    error_type TEXT NOT NULL,
+    message TEXT,
+    source TEXT
+);
+"""
+
 BLACKLIST_EVENTS_DDL = """
 CREATE TABLE IF NOT EXISTS blacklist_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,6 +103,44 @@ CREATE TABLE IF NOT EXISTS blacklist_events (
     reason TEXT, triggered_by TEXT, run_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (stream_id) REFERENCES streams(id)
+);
+"""
+
+FAVORITES_DDL = """
+CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT DEFAULT '',
+    url TEXT NOT NULL,
+    origin_url TEXT DEFAULT '',
+    group_title TEXT DEFAULT '',
+    token_refresh_enabled BOOLEAN DEFAULT 0,
+    token_expires_at DATETIME,
+    is_enabled BOOLEAN DEFAULT 1,
+    is_working BOOLEAN DEFAULT NULL,
+    last_working DATETIME,
+    consecutive_failures INTEGER DEFAULT 0,
+    total_failures INTEGER DEFAULT 0,
+    total_successes INTEGER DEFAULT 0,
+    last_checked DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+FAVORITE_GROUPS_DDL = """
+CREATE TABLE IF NOT EXISTS favorite_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL
+);
+"""
+
+FAVORITE_MEMBERSHIP_DDL = """
+CREATE TABLE IF NOT EXISTS favorite_membership (
+    favorite_id INTEGER NOT NULL,
+    group_id INTEGER NOT NULL,
+    PRIMARY KEY (favorite_id, group_id),
+    FOREIGN KEY (favorite_id) REFERENCES favorites(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES favorite_groups(id) ON DELETE CASCADE
 );
 """
 
@@ -152,6 +203,10 @@ class Database:
         c.executescript(RUNS_DDL)
         c.executescript(BLACKLIST_EVENTS_DDL)
         c.executescript(ENABLE_EVENTS_DDL)
+        c.executescript(FAVORITES_DDL)
+        c.executescript(RUN_ERRORS_DDL)
+        c.executescript(FAVORITE_GROUPS_DDL)
+        c.executescript(FAVORITE_MEMBERSHIP_DDL)
         c.executescript(CONFIG_DDL)
         c.execute(
             "INSERT OR IGNORE INTO config(key, value, description) VALUES(?,?,?)",
@@ -178,6 +233,18 @@ class Database:
         rcols = {r[1] for r in self.writer.execute("PRAGMA table_info(runs)")}
         if "progress_json" not in rcols:
             self.writer.execute("ALTER TABLE runs ADD COLUMN progress_json TEXT")
+        # Migration: add source/is_url columns for batched token refresh
+        scols = {r[1] for r in self.writer.execute("PRAGMA table_info(streams)")}
+        if "source" not in scols:
+            self.writer.execute("ALTER TABLE streams ADD COLUMN source TEXT")
+            self.writer.execute("ALTER TABLE streams ADD COLUMN is_url BOOLEAN DEFAULT 0")
+            # backfill from existing source_path/source_type
+            self.writer.execute(
+                "UPDATE streams SET source = source_path WHERE source IS NULL "
+                "AND source_path IS NOT NULL AND source_path != ''")
+            self.writer.execute(
+                "UPDATE streams SET is_url = 1 WHERE source IS NOT NULL "
+                "AND source_type = 'remote'")
         if version != SCHEMA_VERSION:
             self.writer.execute(
                 "INSERT OR REPLACE INTO config(key, value) VALUES('schema_version', ?)",
@@ -213,3 +280,142 @@ class Database:
 
     def query(self, sql: str, params=()):
         return self.writer.execute(sql, params).fetchall()
+
+    # --- favorites subsystem (separate from main streams pipeline) ---
+    def favorite_add(self, name, url, origin_url="", group_title="",
+                     token_refresh_enabled=False):
+        c = self.writer
+        cur = c.execute(
+            "INSERT INTO favorites(name, url, origin_url, group_title, "
+            "token_refresh_enabled) VALUES(?,?,?,?,?)",
+            (name or "", url, origin_url or "", group_title or "",
+             1 if token_refresh_enabled else 0),
+        )
+        fid = cur.lastrowid
+        self.writer.commit()
+        return fid
+
+    def favorite_add_existing(self, stream_url, name="", group_title="",
+                              token_refresh_enabled=False):
+        """Add a favorite from an existing streams.url (carries its origin)."""
+        row = self.writer.execute(
+            "SELECT url, original_url FROM streams WHERE url=? OR original_url=?",
+            (stream_url, stream_url),
+        ).fetchone()
+        if not row:
+            return None
+        url = row["original_url"] or row["url"]
+        return self.favorite_add(name or "", url, origin_url="",
+                                 group_title=group_title,
+                                 token_refresh_enabled=token_refresh_enabled)
+
+    def favorite_list(self, group="", working="", q=""):
+        sql = ("SELECT f.*, GROUP_CONCAT(g.name) AS groups "
+               "FROM favorites f "
+               "LEFT JOIN favorite_membership m ON m.favorite_id=f.id "
+               "LEFT JOIN favorite_groups g ON g.id=m.group_id ")
+        where, params = [], []
+        if group:
+            sql += ("WHERE f.id IN (SELECT favorite_id FROM favorite_membership mm "
+                    "JOIN favorite_groups gg ON gg.id=mm.group_id WHERE gg.name=?) ")
+            params.append(group)
+            where.append("1")
+        if working:
+            if working == "working":
+                where.append("f.is_working=1")
+            elif working == "notworking":
+                where.append("f.is_working=0")
+            elif working == "unchecked":
+                where.append("f.is_working IS NULL")
+        if q:
+            where.append("(f.name LIKE ? OR f.url LIKE ?)")
+            params += [f"%{q}%", f"%{q}%"]
+        if where:
+            prefix = "AND" if group else "WHERE"
+            sql += f" {prefix} " + " AND ".join(where) + " "
+        sql += "GROUP BY f.id ORDER BY f.name"
+        return self.writer.execute(sql, params).fetchall()
+
+    def favorite_set_enabled(self, fid, enabled):
+        self.writer.execute(
+            "UPDATE favorites SET is_enabled=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=?", (1 if enabled else 0, fid))
+        self.writer.commit()
+
+    def favorite_delete(self, fid):
+        self.writer.execute("DELETE FROM favorites WHERE id=?", (fid,))
+        self.writer.commit()
+
+    def favorite_record_result(self, fid, ok: bool):
+        c = self.writer
+        if ok:
+            c.execute(
+                "UPDATE favorites SET is_working=1, last_working=CURRENT_TIMESTAMP, "
+                "last_checked=CURRENT_TIMESTAMP, total_successes=total_successes+1, "
+                "consecutive_failures=0, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (fid,))
+        else:
+            c.execute(
+                "UPDATE favorites SET is_working=0, last_checked=CURRENT_TIMESTAMP, "
+                "total_failures=total_failures+1, consecutive_failures=consecutive_failures+1, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=?", (fid,))
+        c.commit()
+
+    def favorite_groups(self):
+        return self.writer.execute(
+            "SELECT id, name FROM favorite_groups ORDER BY name").fetchall()
+
+    def favorite_set_group(self, fids, group_name):
+        """Assign every given favorite to `group_name` (replaces its group membership)."""
+        c = self.writer
+        g = c.execute("SELECT id FROM favorite_groups WHERE name=?",
+                      (group_name,)).fetchone()
+        if not g:
+            cur = c.execute("INSERT INTO favorite_groups(name) VALUES(?)", (group_name,))
+            gid = cur.lastrowid
+        else:
+            gid = g["id"]
+        for fid in fids:
+            c.execute("DELETE FROM favorite_membership WHERE favorite_id=?", (fid,))
+            c.execute("INSERT OR IGNORE INTO favorite_membership(favorite_id, group_id) "
+                      "VALUES(?,?)", (fid, gid))
+        c.commit()
+
+    # --- run error log (run-scoped; surfaced in the Web UI) ---
+    MAX_ERRORS_PER_RUN = 200  # hard cap so a mass-failure run can't flood the table
+
+    def log_error(self, run_id, error_type, message="", source=""):
+        """Record a non-fatal error that occurred during a run (e.g. a source
+        fetch failure / rate-limit / timeout). Fatal run errors are captured in
+        runs.error_message; this table captures per-event detail. Capped per run
+        so a mass-failure run (thousands of tokened sources all down) can't flood
+        the table or trigger a commit storm."""
+        rid = str(run_id)
+        try:
+            count = self.writer.execute(
+                "SELECT COUNT(*) FROM run_errors WHERE run_id=?", (rid,)
+            ).fetchone()[0]
+        except Exception:
+            count = 0
+        if count >= self.MAX_ERRORS_PER_RUN:
+            return
+        self.writer.execute(
+            "INSERT INTO run_errors(run_id, error_type, message, source) "
+            "VALUES(?,?,?,?)",
+            (rid, str(error_type), str(message)[:2000], str(source)[:500]),
+        )
+        self.writer.commit()
+
+    def get_run_errors(self, run_id=None, limit=200):
+        """Return recent run errors. If run_id is given, only that run's errors."""
+        if run_id:
+            rows = self.query(
+                "SELECT id, run_id, occurred_at, error_type, message, source "
+                "FROM run_errors WHERE run_id=? ORDER BY id DESC LIMIT ?",
+                (str(run_id), limit))
+        else:
+            rows = self.query(
+                "SELECT id, run_id, occurred_at, error_type, message, source "
+                "FROM run_errors ORDER BY id DESC LIMIT ?",
+                (limit,))
+        return rows

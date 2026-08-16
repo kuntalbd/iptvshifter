@@ -98,8 +98,8 @@ class StreamValidator:
     """Validates streams concurrently. The HTTP transport is injectable
     (`http_client`) so tests can run offline against canned responses."""
 
-    def __init__(self, config, http_client=None, token_refresh=True,
-                 workers=None, retries=None, backoff=None, per_host=None):
+    def __init__(self, config, http_client=None, workers=None, retries=None,
+                 backoff=None, per_host=None):
         self.config = config
         self.workers = int(workers if workers is not None else config.get("validation.workers", 20))
         self.timeout = (
@@ -111,7 +111,6 @@ class StreamValidator:
         self.per_host = int(per_host if per_host is not None else config.get("validation.per_host_limit", 5))
         self.verify_ssl = bool(config.get("validation.verify_ssl", True))
         self.follow_redirects = bool(config.get("validation.follow_redirects", True))
-        self.token_refresh = token_refresh
         self._client = http_client  # callable(session, method, url, **kw) -> resp-like
         self._session = None
         self._thread_local = __import__("threading").local()

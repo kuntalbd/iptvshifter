@@ -25,7 +25,7 @@
 </div>
 <div style="display:flex; gap:1rem; align-items:flex-start;">
   <table class="tbl" id="streams" style="flex:1;">
-    <thead><tr><th>Name</th><th>Provider</th><th>Tier</th><th>Health</th><th>Working</th><th>Checked</th></tr></thead>
+    <thead><tr><th>Name</th><th>Provider</th><th>Tier</th><th>Health</th><th>Working</th><th>Checked</th><th>Last Working</th><th>Total Fail</th><th>Consec Fail</th></tr></thead>
     <tbody></tbody>
   </table>
   <aside id="detail" class="detail" style="width:340px;"></aside>
@@ -45,7 +45,10 @@ function loadStreams(){
       <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
       <td>${ICON[r.health_tier]||'?'}${r.health_score!=null?(' '+Math.round(r.health_score)):''}</td>
       <td>${r.is_working===1?'✔':(r.is_working===0?'✘':'?')}</td>
-      <td>${r.last_checked||''}</td></tr>`).join('');
+      <td>${r.last_checked||''}</td>
+      <td>${r.last_working||''}</td>
+      <td class="${r.total_failures>0?'warn':''}">${r.total_failures||0}</td>
+      <td class="${r.consecutive_failures>0?'warn':''}">${r.consecutive_failures||0}</td></tr>`).join('');
   });
 }
 function showDetail(id){

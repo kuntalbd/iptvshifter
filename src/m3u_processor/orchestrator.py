@@ -132,7 +132,7 @@ class Orchestrator:
         return rows
 
     # --- main run ---
-    def run(self, mode="quick", token_refresh=None, run_id=None):
+    def run(self, mode="quick", run_id=None):
         from time import time as _t
         if run_id:
             self.run_id = str(run_id)
@@ -165,14 +165,6 @@ class Orchestrator:
             self.db.commit()
         except Exception:
             pass
-        if token_refresh is None:
-            # mode default (§3): quick OFF, regular/full ON
-            token_refresh = (mode != "quick")
-            # refresh mode is token-focused: always re-extract fresh tokens
-            if mode == "refresh":
-                token_refresh = True
-            # CLI override already applied to config by caller
-            token_refresh = token_refresh and bool(self.config.get("validation.token_refresh", True))
         self.stats["mode"] = mode
         self.mode = mode
 
@@ -233,7 +225,7 @@ class Orchestrator:
         self.stats["unique"] = self.db.query("SELECT COUNT(*) FROM streams")[0][0]
 
         validator = StreamValidator(
-            self.config, http_client=self.http_client, token_refresh=token_refresh
+            self.config, http_client=self.http_client
         )
         # quick mode = fast latency-only health (no 3s throughput sampling).
         # Full/regular/refresh keep throughput (Option B) for accurate scoring.
@@ -250,86 +242,82 @@ class Orchestrator:
 
         if mode == "refresh":
             # Refresh: plain token re-extraction ONLY. No active/health check.
-            # Re-read the original source files to grab fresh tokens (C1), update
-            # the DB, then publish the full output generated from the whole DB.
-            done = 0
-            total = len(rows)
-            for row in rows:
-                if self._stop:
-                    break
-                stream = self._row_to_stream(row)
-                if not provider_enabled(self.db, stream):
-                    done += 1
-                    continue
-                refreshed = self._refresh_token(stream)
-                if refreshed:
-                    self.stats["token_refreshed"] += 1
-                done += 1
-                if self.progress:
-                    self.progress(done, total)
-                if done % 25 == 0 or done == total:
-                    self._persist_progress(done, total)
-            self._persist_progress(done, total)
-            # record last refresh time (audit; scheduling authority = systemd timer)
-            self.db.execute(
-                "INSERT OR REPLACE INTO config(key, value) VALUES('last_refresh_at', ?)",
-                (datetime.now(timezone.utc).isoformat(),),
-            )
+            # Batched: group eligible streams by `source`, fetch/read each source
+            # ONCE, parse once, and update all matching streams. Fixes the old
+            # per-stream re-read (N redundant fetches for shared sources) and
+            # supports remote-URL sources (C1).
+            try:
+                total = len(rows)
+                self.stats["token_refreshed"] = self._refresh_tokens_batched()
+                done = total
+                self._persist_progress(done, total)
+                # record last refresh time (audit; scheduling authority = systemd timer)
+                self.db.execute(
+                    "INSERT OR REPLACE INTO config(key, value) VALUES('last_refresh_at', ?)",
+                    (datetime.now(timezone.utc).isoformat(),),
+                )
+            except Exception as e:  # noqa: BLE001
+                self.db.log_error(self.run_id, "fatal_run_error", f"{type(e).__name__}: {e}")
+                self.db.execute(
+                    "UPDATE runs SET error_message=?, status='error', finished_at=CURRENT_TIMESTAMP WHERE run_id=?",
+                    (f"{type(e).__name__}: {e}"[:2000], self.run_id),
+                )
+                self.db.commit()
+                self.stats["error"] = f"{type(e).__name__}: {e}"
+                raise
             self._finalize()
             return self.stats
 
         # ---- Solution A: 2-phase funnel (parallel cheap HEAD -> deep A+B) ----
-        # Phase 1: cheap reachability pass (NO throughput sampling) over ALL
-        # eligible links, concurrent via the thread pool (workers=150). Dead
-        # links fail fast at the short timeout. Phase 2: deep A+B (latency +
-        # throughput) health scoring, concurrent, on the active subset only.
-        # Each link is accounted exactly ONCE: failed links in Phase 1, ok links
-        # in Phase 2 (their deep health rescored). Avoids double-counting.
-        phase1_rows = rows
-        total = len(phase1_rows)
-        self._persist_progress(0, total)
+        try:
+            phase1_rows = rows
+            total = len(phase1_rows)
+            self._persist_progress(0, total)
 
-        # Phase 1 (health=False) — concurrent
-        phase1_results = {}
-        done_p1 = 0
-        for stream, res in validator.validate_batch(
-            [self._row_to_stream(r) for r in phase1_rows],
-            progress=lambda d, t: self._persist_progress(d, t),
-            health=False,
-        ):
-            if not provider_enabled(self.db, stream):
+            # Phase 1 (health=False) — concurrent
+            phase1_results = {}
+            done_p1 = 0
+            for stream, res in validator.validate_batch(
+                [self._row_to_stream(r) for r in phase1_rows],
+                progress=lambda d, t: self._persist_progress(d, t),
+                health=False,
+            ):
+                if not provider_enabled(self.db, stream):
+                    done_p1 += 1
+                    continue
+                phase1_results[stream.id] = (stream, res)
+                if res.ok:
+                    pass  # deep-scored in Phase 2
+                else:
+                    # record the failure transition exactly once
+                    self._process_result(stream, res, validator, mode)
                 done_p1 += 1
-                continue
-            phase1_results[stream.id] = (stream, res)
-            if res.ok:
-                pass  # deep-scored in Phase 2
-            else:
-                # record the failure transition exactly once
-                self._process_result(stream, res, validator, token_refresh, mode)
-            done_p1 += 1
 
-        phase1_ok = [v[0] for v in phase1_results.values() if v[1].ok]
-        self.stats["phase1_active"] = len(phase1_ok)
-        self._persist_progress(done_p1, total)
+            phase1_ok = [v[0] for v in phase1_results.values() if v[1].ok]
+            self.stats["phase1_active"] = len(phase1_ok)
+            self._persist_progress(done_p1, total)
 
-        # Phase 2 (health=True) — concurrent, active subset only
-        total2 = len(phase1_ok)
-        done2 = 0
-        for stream, res in validator.validate_batch(
-            phase1_ok,
-            progress=lambda d, t: self._persist_progress(done_p1 + d, done_p1 + t),
-            health=True,
-        ):
-            self._process_result(stream, res, validator, token_refresh, mode)
-            done2 += 1
+            # Phase 2 (health=True) — concurrent, active subset only
+            total2 = len(phase1_ok)
+            done2 = 0
+            for stream, res in validator.validate_batch(
+                phase1_ok,
+                progress=lambda d, t: self._persist_progress(done_p1 + d, done_p1 + t),
+                health=True,
+            ):
+                self._process_result(stream, res, validator, mode)
+                done2 += 1
 
-        # record last refresh time (audit; scheduling authority = systemd timer)
-        if mode == "refresh" and rows:
+            self._persist_progress(done_p1 + done2, total + total2)
+        except Exception as e:  # noqa: BLE001
+            self.db.log_error(self.run_id, "fatal_run_error", f"{type(e).__name__}: {e}")
             self.db.execute(
-                "INSERT OR REPLACE INTO config(key, value) VALUES('last_refresh_at', ?)",
-                (datetime.now(timezone.utc).isoformat(),),
+                "UPDATE runs SET error_message=?, status='error', finished_at=CURRENT_TIMESTAMP WHERE run_id=?",
+                (f"{type(e).__name__}: {e}"[:2000], self.run_id),
             )
-        self._persist_progress(done_p1 + done2, total + total2)
+            self.db.commit()
+            self.stats["error"] = f"{type(e).__name__}: {e}"
+            raise
         self._finalize()
         return self.stats
 
@@ -369,7 +357,7 @@ class Orchestrator:
         )
         return s
 
-    def _process_result(self, stream, res, validator, token_refresh, mode):
+    def _process_result(self, stream, res, validator, mode):
         self.stats["checked"] += 1
         if res.uncheckable:
             self.stats["uncheckable"] += 1
@@ -381,19 +369,11 @@ class Orchestrator:
             self.db.commit()
             return
 
-        # C1 hybrid: on suspected_expired, try token re-extraction before failing hard
-        if res.suspected_expired and token_refresh:
-            refreshed = self._try_token_refresh(stream)
-            if refreshed:
-                self.stats["token_refreshed"] += 1
-                res2 = validator.validate_one(stream)
-                if res2.ok:
-                    res = res2
-                else:
-                    res = res2  # still failing -> count as failure below
-
+        # NOTE: token re-extraction is intentionally NOT performed here. It runs
+        # only in dedicated refresh mode (scheduled every 2h). quick/regular/full
+        # modes just validate; expired tokens are rotated by the refresh run.
         transition = apply_result(stream, res.ok, res.suspected_expired,
-                                   self.config, run_id=self.run_id)
+                                  self.config, run_id=self.run_id)
         self._count_transition(transition)
         # persist (health is only meaningful when we actually measured it)
         health_score = res.health_score if res.ok else None
@@ -414,37 +394,93 @@ class Orchestrator:
             self.stats["failed"] += 1
         self.db.commit()
 
-    def _try_token_refresh(self, stream):
-        """Re-extract a fresh token for the same normalized url from its source
-        file if local/readable. Returns True if original_url was updated."""
-        # Only attempt if source_path is a local file we can re-read
-        src = stream.source_path
-        if not src or not os.path.isfile(src):
-            return False
-        try:
-            parser = PlaylistParser(
-                aggregate_subdomains=bool(self.config.get("providers.aggregate_subdomains", True))
-            )
-            for s in parser.parse_file(src, source_type="local"):
-                if s.url == stream.url and s.original_url != stream.original_url:
-                    stream.original_url = s.original_url
-                    return True
-        except Exception:
-            return False
-        return False
+    def _norm_url(self, url: str) -> str:
+        """Token-stripped normalization key (matches regardless of token presence)."""
+        params = self.config.get("validation.strip_query_params") or list(ROTATING_TOKEN_PARAMS)
+        if "?" not in url:
+            return url
+        base, q = url.split("?", 1)
+        keep = []
+        for pair in q.split("&"):
+            key = pair.split("=", 1)[0]
+            if key not in params:
+                keep.append(pair)
+        return base + ("?" + "&".join(keep) if keep else "")
 
-    def _refresh_token(self, stream) -> bool:
-        """Refresh-mode token update: re-read the source, grab the fresh tokened
-        URL, persist it. Plain task — no active/health check. Returns True if the
-        URL was updated (token rotated)."""
-        updated = self._try_token_refresh(stream)
-        if updated:
-            self.db.execute(
-                "UPDATE streams SET original_url=? WHERE id=?",
-                (stream.original_url, stream.id),
-            )
-            self.db.commit()
-        return updated
+    def _refresh_tokens_batched(self):
+        """Batched token refresh for refresh mode.
+
+        Groups eligible (tokened) streams by `source`, then fetches/reads each
+        unique source EXACTLY ONCE, parses it once, builds a
+        norm_url -> tokened_original_url map, and batch-updates every matching
+        stream. This fixes the old per-stream re-read (N redundant fetches for
+        shared sources) and supports remote-URL sources (not just local files).
+        """
+        token_params = self.config.get("validation.strip_query_params") or list(ROTATING_TOKEN_PARAMS)
+        like = " OR ".join(f"original_url LIKE '%{p}=%'" for p in token_params)
+        rows = self.db.query(
+            f"SELECT id, url, original_url, source, is_url FROM streams "
+            f"WHERE source IS NOT NULL AND source != '' AND ({like})"
+        )
+        if not rows:
+            return 0
+
+        # group stream ids by source
+        by_source = {}
+        for r in rows:
+            by_source.setdefault((r["source"], r["is_url"]), []).append(r)
+
+        refreshed = 0
+
+        for (src, is_url), srows in by_source.items():
+            if self._stop:
+                break
+            # fetch/read the source ONCE (batched: each unique source = 1 fetch)
+            text = None
+            if is_url:
+                try:
+                    import requests
+                    resp = requests.get(src, timeout=30)
+                    resp.raise_for_status()
+                    text = resp.text
+                except Exception as e:
+                    self.db.log_error(self.run_id, "source_fetch_failed",
+                                     f"{type(e).__name__}: {e}", src)
+                    continue
+            else:
+                if not os.path.isfile(src):
+                    self.db.log_error(self.run_id, "source_missing", "local file not found", src)
+                    continue
+                try:
+                    with open(src, "r", encoding="utf-8", errors="replace") as f:
+                        text = f.read()
+                except Exception as e:
+                    self.db.log_error(self.run_id, "source_read_failed",
+                                     f"{type(e).__name__}: {e}", src)
+                    continue
+            # parse ONCE -> map norm_url -> tokened original_url
+            try:
+                parser = PlaylistParser(
+                    aggregate_subdomains=bool(self.config.get("providers.aggregate_subdomains", True))
+                )
+                entries = parser.parse_text(text, source_type="remote" if is_url else "local",
+                                            source_path=src, base_url=src if is_url else None)
+            except Exception:
+                continue
+            fresh_map = {}
+            for e in entries:
+                fresh_map[self._norm_url(e.url)] = e.original_url
+            # batch-update matching streams
+            for r in srows:
+                new = fresh_map.get(self._norm_url(r["url"]))
+                if new and new != r["original_url"]:
+                    self.db.execute(
+                        "UPDATE streams SET original_url=? WHERE id=?",
+                        (new, r["id"]),
+                    )
+                    refreshed += 1
+        self.db.commit()
+        return refreshed
 
     def _count_transition(self, t):
         e = t.get("event")

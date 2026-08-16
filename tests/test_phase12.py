@@ -355,7 +355,7 @@ def test_api_runs_and_live_endpoints():
     assert runs[0]["mode"] == "full"
     # live: run is finished -> no active run
     live = c.get("/api/live").json()
-    assert live["active"] is False
+    assert live["is_run_active"] is False
     # pages render
     assert c.get("/runs").status_code == 200
     assert c.get("/live").status_code == 200

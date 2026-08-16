@@ -87,7 +87,7 @@ def test_non_http_uncheckable():
 def test_tokened_403_suspected_expired():
     # C1: tokened URL 403 -> suspected_expired, not plain failure
     c = FakeClient({"/tok/": (403, "text/html")})
-    v = StreamValidator(_cfg(), http_client=c, token_refresh=True)
+    v = StreamValidator(_cfg(), http_client=c)
     s = _mk_stream("#EXTINF:-1,T\nhttp://e/tok/x.m3u8?md5=Z&expires=1\n")
     r = v.validate_one(s)
     assert r.suspected_expired and not r.ok

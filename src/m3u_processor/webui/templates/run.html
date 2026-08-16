@@ -17,7 +17,6 @@
       <option value="refresh">refresh (tokened+working)</option>
     </select>
   </label>
-  <label><input type="checkbox" id="token_refresh"> Token refresh (stale-token re-extract)</label>
   <button onclick="startRun()">Start</button>
 </div>
 <p class="muted">Pick a <b>scheduler job</b> to run it with its configured mode, or choose a manual mode.
@@ -44,7 +43,7 @@ async function refreshJobs(){
 async function refreshActive(){
   const r=await fetch('/api/run-status'); const d=await r.json();
   const warn=document.getElementById('active-warn');
-  if(d.active){
+  if(d.is_run_active){
     warn.classList.remove('hidden');
     document.getElementById('active-mode').textContent=d.mode;
   } else warn.classList.add('hidden');
@@ -52,9 +51,8 @@ async function refreshActive(){
 function startRun(){
   const job=document.getElementById('job').value;
   const mode=document.getElementById('mode').value;
-  const tr=document.getElementById('token_refresh').checked;
   document.getElementById('result').textContent='';
-  const body=job?{job,token_refresh:tr}:{mode,token_refresh:tr};
+  const body=job?{job}:{mode};
   fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)})
     .then(r=>r.json()).then(j=>{

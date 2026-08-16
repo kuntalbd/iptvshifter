@@ -44,7 +44,7 @@ def test_refresh_mode_targets_only_tokened_working():
         "elapsed_ms": 100, "throughput_kbps": 5000,
         "health_score": 90.0, "health_tier": "healthy"})()
     # run refresh
-    stats = orch.run(mode="refresh", token_refresh=True)
+    stats = orch.run(mode="refresh")
     # only u1 (tokened + working) should be eligible/checked
     assert stats["eligible"] == 1, stats
     assert stats["mode"] == "refresh"
@@ -61,7 +61,7 @@ def test_refresh_records_last_refresh_at():
         "reason": "", "uncheckable": False, "suspected_expired": False,
         "elapsed_ms": 100, "throughput_kbps": 5000,
         "health_score": 90.0, "health_tier": "healthy"})()
-    orch.run(mode="refresh", token_refresh=True)
+    orch.run(mode="refresh")
     row = db.query("SELECT value FROM config WHERE key='last_refresh_at'")
     assert row, "last_refresh_at not recorded"
     db.close()
@@ -116,7 +116,7 @@ def test_fresh_eye_refresh_does_not_touch_plain_streams():
         "reason": "", "uncheckable": False, "suspected_expired": False,
         "elapsed_ms": 100, "throughput_kbps": 5000,
         "health_score": 90.0, "health_tier": "healthy"})()
-    orch.run(mode="refresh", token_refresh=True)
+    orch.run(mode="refresh")
     # u2 (plain working) must remain is_working=1 untouched
     u2 = db.query("SELECT is_working FROM streams WHERE url='u2'")[0][0]
     assert u2 == 1

@@ -24,7 +24,6 @@ ENV_MAP = {
     "M3U_WEBUI_HOST": "webui.host",
     "M3U_WEBUI_PORT": "webui.port",
     "M3U_VALIDATION_MODE": "validation.mode",
-    "M3U_TOKEN_REFRESH": "validation.token_refresh",
 }
 
 DEFAULTS: dict = {
@@ -56,7 +55,6 @@ DEFAULTS: dict = {
         "follow_redirects": True,
         "max_redirects": 5,
         "verify_ssl": True,
-        "token_refresh": True,
         "max_token_refetch_per_feed": 1,
         "strip_query_params": [
             "token", "sig", "signature", "sign", "token2", "auth",

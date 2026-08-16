@@ -210,7 +210,7 @@ def test_webui_scheduler_and_run_status(tmp_path):
     # run-status with no active run
     r = client.get("/api/run-status")
     assert r.status_code == 200
-    assert r.json()["active"] is False
+    assert r.json()["is_run_active"] is False
 
     # stop with no active run -> ok False
     r = client.post("/api/run/stop")

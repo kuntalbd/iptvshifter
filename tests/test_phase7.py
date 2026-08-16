@@ -145,7 +145,7 @@ def test_fresh_eye_run_api_returns_run_id():
     from fastapi.testclient import TestClient
     c = TestClient(app)
     # run in quick mode against local data (no network needed since stream is http but untested -> uncheckable path)
-    r = c.post("/api/run", json={"mode": "quick", "token_refresh": False})
+    r = c.post("/api/run", json={"mode": "quick"})
     assert "run_id" in r.json()
     # the background thread will process; just confirm it started
     assert r.status_code == 200
@@ -177,7 +177,7 @@ def test_api_run_with_job_resolves_mode():
     from fastapi.testclient import TestClient
     c = TestClient(app)
     # config example has jobs incl. token-refresh (refresh mode)
-    r = c.post("/api/run", json={"job": "token-refresh", "token_refresh": False})
+    r = c.post("/api/run", json={"job": "token-refresh"})
     j = r.json()
     assert "run_id" in j
     # refresh mode on a 1-stream DB: eligible likely 0 (CNN has no token), ok

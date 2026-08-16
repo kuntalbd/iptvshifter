@@ -95,8 +95,11 @@ def test_orchestrator_full_mode_checks_blacklisted():
     db.close()
 
 
-def test_stale_token_refresh_from_local_source():
-    # C1: tokened URL 403s, but a re-read of the LOCAL source has a fresh token -> refresh
+def test_stale_token_refreshed_only_in_refresh_mode():
+    # Option B: token re-extraction happens ONLY in the dedicated refresh mode,
+    # not in regular/quick runs. This test verifies a stale token is rotated by a
+    # refresh run (which re-reads the source with a fresh token) and is NOT
+    # silently hard-failed by a regular run.
     tmp = tempfile.mkdtemp()
     db = Database(os.path.join(tmp, "t.db"))
     db.init_db(backup=False)
@@ -106,28 +109,26 @@ def test_stale_token_refresh_from_local_source():
         f.write("#EXTM3U\n#EXTINF:-1,T\nhttp://e/tok/x.m3u8?md5=OLD&expires=1\n")
     orch = Orchestrator(db, _cfg(), http_client=None)
     orch.ingest_source(pl)
-    # validator always 403 on this url (expired)
+
+    # 1) a regular run with a 403 validator must NOT refresh the token
     class Always403:
         def __call__(self, method, url, **kw): return FakeResp(403, "text/html")
     orch.http_client = Always403()
-    orch.run(mode="regular", token_refresh=True)  # will try refresh
-    # now update source file with a FRESH token (simulate list refreshed)
+    stats_reg = orch.run(mode="regular")
+    tok = db.query("SELECT original_url, is_working FROM streams WHERE url LIKE '%tok%'")[0]
+    assert tok["original_url"] == "http://e/tok/x.m3u8?md5=OLD&expires=1"
+    assert stats_reg.get("token_refreshed", 0) == 0
+
+    # 2) source file now has a FRESH token (simulate list refreshed)
     with open(pl, "w") as f:
         f.write("#EXTM3U\n#EXTINF:-1,T\nhttp://e/tok/x.m3u8?md5=NEW&expires=9999999999\n")
-    class FreshOK:
-        def __call__(self, method, url, **kw):
-            class R: pass
-            r = R(); r.headers = {"Content-Type": "application/vnd.apple.mpegurl"}
-            r.status_code = 200 if "md5=NEW" in url else 403
-            return r
-    orch.http_client = FreshOK()
-    stats = orch.run(mode="regular", token_refresh=True)
-    # token should have been refreshed and stream working
-    tok = db.query("SELECT original_url, is_working FROM streams WHERE url LIKE '%tok%'")[0]
-    assert "md5=NEW" in tok["original_url"], tok["original_url"]
-    assert tok["is_working"] == 1
-    assert stats["token_refreshed"] >= 1
+    # refresh mode re-reads the source and rotates the token
+    orch2 = Orchestrator(db, _cfg(), http_client=Always403())
+    orch2.run(mode="refresh")
+    tok2 = db.query("SELECT original_url FROM streams WHERE url LIKE '%tok%'")[0]
+    assert "md5=NEW" in tok2["original_url"], tok2["original_url"]
     db.close()
+
 
 
 def test_disabled_provider_streams_skipped():
