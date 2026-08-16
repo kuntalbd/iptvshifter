@@ -1,4 +1,8 @@
 #EXTM3U
-# === Education ===
-#EXTINF:-1 group-title="Education",T
-http://e/tok/x.m3u8?md5=NEW&expires=9999999999
+# === Other ===
+#EXTINF:-1 group-title="Other",Dead
+http://example.com/dead/x.m3u8
+#EXTINF:-1 group-title="Other",RTMP
+rtmp://example.com/live/s
+#EXTINF:-1 group-title="Other",Working
+http://example.com/ok/master.m3u8
