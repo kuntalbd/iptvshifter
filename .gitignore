@@ -2,6 +2,16 @@
 # Publish the SOURCE + docs + examples + Dockerfile. Keep secrets, local
 # databases, generated playlists, and private deployment out of git.
 
+# ---- Local scratch / QA scratch (internal-only specs, never public) ----
+tmp/
+
+# ---- Real feed list (private URLs). Public version is examples/feeds.example.txt ----
+feeds.txt
+
+# ---- Private runtime config (public version is examples/config.example.yaml) ----
+config.yaml
+*.local.yaml
+
 # ---- Secrets / credentials (NEVER commit) ----
 .env
 *.env
