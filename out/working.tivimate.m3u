@@ -1,1 +1,4 @@
 #EXTM3U
+# === Education ===
+#EXTINF:-1 group-title="Education",T
+http://e/tok/x.m3u8?md5=NEW&expires=9999999999
