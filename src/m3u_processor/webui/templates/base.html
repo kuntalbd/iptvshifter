@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}M3U Processor{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">M3U Processor <span class="ver">v{{ version }}</span></div>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/streams">Streams</a>
+      <a href="/providers">Providers</a>
+      <a href="/blacklist">Blacklist</a>
+      <a href="/run">Run</a>
+      <a href="/runs">Runs</a>
+      <a href="/schedules">Schedules</a>
+      <a href="/live">Live</a>
+      <a href="/settings">Settings</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Live Run{% endblock %}
+{% block content %}
+<h1>Live Run</h1>
+<div id="live">
+  <p class="muted">Checking for an active run…</p>
+</div>
+<script>
+function fmtTime(t){ if(!t) return "—"; return new Date(t).toLocaleString(); }
+function fmtElapsed(start){
+  if(!start) return "—";
+  const s=new Date(start).getTime();
+  let sec=Math.floor((Date.now()-s)/1000);
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), x=sec%60;
+  return (h?h+"h ":"")+(m?m+"m ":"")+x+"s";
+}
+function render(d){
+  const el=document.getElementById("live");
+  if(!d.active){
+    el.innerHTML=`<div class="card"><div class="num">idle</div>
+      <div class="lb">No active run right now.</div></div>
+      <p class="muted">Runs triggered by the scheduler or the Run page appear here automatically.</p>`;
+    return;
+  }
+  const p=d.progress||{};
+  const pct=p.percent!=null?p.percent:0;
+  el.innerHTML=`
+    <div class="cards">
+      <div class="card"><div class="num">${d.mode}</div><div class="lb">mode</div></div>
+      <div class="card"><div class="num">${fmtElapsed(d.started_at)}</div><div class="lb">elapsed</div></div>
+      <div class="card"><div class="num">${pct}%</div><div class="lb">progress</div></div>
+      <div class="card"><div class="num">${p.done||0}/${p.total||0}</div><div class="lb">streams</div></div>
+      <div class="card good"><div class="num">${p.working||0}</div><div class="lb">working</div></div>
+      <div class="card"><div class="num">${p.failed||0}</div><div class="lb">failed</div></div>
+    </div>
+    <div class="progress"><div class="bar" style="width:${pct}%"></div></div>
+    <p class="muted">run_id ${d.run_id} · started ${fmtTime(d.started_at)} · auto-refresh 3s</p>`;
+}
+function load(){
+  fetch("/api/live").then(r=>r.json()).then(render);
+}
+load(); setInterval(load, 3000);
+</script>
+{% endblock %}

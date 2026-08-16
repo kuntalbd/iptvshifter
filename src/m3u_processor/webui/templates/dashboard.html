@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+<div class="cards">
+  <div class="card"><div class="num">{{ stats.total }}</div><div class="lbl">Total streams</div></div>
+  <div class="card ok"><div class="num">{{ stats.working }}</div><div class="lbl">Working</div></div>
+  <div class="card warn"><div class="num">{{ stats.short }}</div><div class="lbl">Short-blacklisted</div></div>
+  <div class="card bad"><div class="num">{{ stats.perm }}</div><div class="lbl">Permanent</div></div>
+  <div class="card"><div class="num">{{ stats.providers }}</div><div class="lbl">Providers</div></div>
+</div>
+
+<div class="cards" id="health-cards">
+  <div class="card good"><div class="num" id="h-healthy">…</div><div class="lbl">⭐ Healthy</div></div>
+  <div class="card warn"><div class="num" id="h-medium">…</div><div class="lbl">⚠️ Medium</div></div>
+  <div class="card bad"><div class="num" id="h-slow">…</div><div class="lbl">🐢 Slow</div></div>
+  <div class="card"><div class="num" id="h-unknown">…</div><div class="lbl">? Unmeasured</div></div>
+</div>
+<p class="muted">Last token-refresh run: <strong id="last-refresh">{{ last_refresh_at or "never" }}</strong>
+  · <a href="/streams?health=healthy">view healthy →</a>
+  · <a href="/streams?health=slow">view slow →</a></p>
+
+<h2>Quick actions</h2>
+<div class="actions">
+  <a class="btn" href="/run">▶ Run a validation</a>
+  <button class="btn" onclick="generateOutputs()">⬇ Generate playlists</button>
+  <span id="gen-status" class="muted"></span>
+</div>
+
+<h2>Last run</h2>
+{% if last_run %}
+<table class="tbl">
+  <tr><th>Run ID</th><td>{{ last_run.run_id }}</td></tr>
+  <tr><th>Mode</th><td>{{ last_run.mode }}</td></tr>
+  <tr><th>Status</th><td>{{ last_run.status }}</td></tr>
+  <tr><th>Started</th><td>{{ last_run.started_at }}</td></tr>
+</table>
+{% else %}
+<p class="muted">No runs yet. Go to <a href="/run">Run</a> to start one.</p>
+{% endif %}
+
+<script>
+fetch('/api/health-stats').then(r=>r.json()).then(d=>{
+  document.getElementById('h-healthy').textContent=d.healthy;
+  document.getElementById('h-medium').textContent=d.medium;
+  document.getElementById('h-slow').textContent=d.slow;
+  document.getElementById('h-unknown').textContent=d.unknown;
+  if(d.last_refresh_at) document.getElementById('last-refresh').textContent=d.last_refresh_at;
+});
+function generateOutputs(){
+  const s=document.getElementById('gen-status'); s.textContent='generating…';
+  fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({formats:['vlc','kodi','tivimate']})})
+    .then(r=>r.json()).then(d=>{ s.textContent='done: '+JSON.stringify(d.files); })
+    .catch(e=>{ s.textContent='error: '+e; });
+}
+</script>
+{% endblock %}

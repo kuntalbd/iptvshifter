@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Run History{% endblock %}
+{% block content %}
+<h1>Run History</h1>
+<div class="filters">
+  <label>Mode
+    <select id="f-mode">
+      <option value="">all</option>
+      <option value="full">full</option>
+      <option value="refresh">refresh</option>
+      <option value="regular">regular</option>
+      <option value="quick">quick</option>
+    </select>
+  </label>
+  <label>Status
+    <select id="f-status">
+      <option value="">all</option>
+      <option value="completed">completed</option>
+      <option value="stopped">stopped</option>
+      <option value="running">running</option>
+      <option value="discarded">discarded</option>
+    </select>
+  </label>
+  <input id="f-q" placeholder="search run_id / stats" oninput="loadRuns()">
+</div>
+<div id="timeline" class="timeline"></div>
+<script>
+function fmtDur(s){ if(s==null) return "—"; s=Math.round(s);
+  const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), x=s%60;
+  return (h?h+"h ":"")+(m?m+"m ":"")+x+"s"; }
+function fmtTime(t){ if(!t) return "—"; return new Date(t).toLocaleString(); }
+function badge(st){ const m={completed:"ok",stopped:"warn",running:"run",discarded:"bad"};
+  return `<span class="pill ${m[st]||''}">${st}</span>`; }
+function loadRuns(){
+  const mode=document.getElementById("f-mode").value;
+  const status=document.getElementById("f-status").value;
+  const q=document.getElementById("f-q").value.toLowerCase();
+  fetch("/api/runs?limit=200&mode="+encodeURIComponent(mode)+"&status="+encodeURIComponent(status))
+    .then(r=>r.json()).then(rows=>{
+      const el=document.getElementById("timeline");
+      let html="";
+      rows.filter(r=>{
+        if(!q) return true;
+        return (r.run_id+" "+(r.publish_error||"")).toLowerCase().includes(q);
+      }).forEach(r=>{
+        const s=r.stats||{};
+        const reason = s.reason ? `<span class="pill bad" title="discarded">${s.reason}</span>` : "";
+        const pub = r.status==="discarded" ? "" :
+          (r.publish_error
+          ? `<span class="pill warn" title="${r.publish_error}">publish ⚠</span>`
+          : `<span class="pill ok">published</span>`);
+        html += `<div class="tl-item">
+          <div class="tl-dot ${r.status}"></div>
+          <div class="tl-card">
+            <div class="tl-head">
+              <strong>${r.mode}</strong> ${badge(r.status)} ${pub} ${reason}
+              <span class="tl-time">${fmtTime(r.started_at)}</span>
+            </div>
+            <div class="tl-meta">duration ${fmtDur(r.duration_seconds)} · run_id ${r.run_id}</div>
+            <div class="tl-stats">
+              checked <b>${s.checked??0}</b> · working <b>${s.working??0}</b> ·
+              failed <b>${s.failed??0}</b> · token_refreshed <b>${s.token_refreshed??0}</b>
+            </div>
+          </div>
+        </div>`;
+      });
+      el.innerHTML = html || `<p class="muted">No runs match.</p>`;
+    });
+}
+loadRuns();
+setInterval(loadRuns, 15000);
+</script>
+{% endblock %}

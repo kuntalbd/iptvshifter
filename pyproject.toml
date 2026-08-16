@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m3u-processor"
+version = "1.2.0"
+description = "M3U Playlist Processor — parse, dedupe, validate, and generate player-ready IPTV playlists (Pi-friendly, stdlib-only DB)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.6",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+m3u-processor = "m3u_processor.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["m3u_processor"]
+
+[tool.setuptools.package-data]
+m3u_processor = ["webui/templates/*.html", "webui/static/*.css"]

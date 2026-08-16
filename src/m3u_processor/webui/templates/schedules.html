@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Schedules{% endblock %}
+{% block content %}
+<h1>Scheduled jobs</h1>
+<p class="muted">Jobs run as systemd timers (reboot-persistent). Add / edit / remove below — changes are written to <code>config.yaml</code> and the systemd units are regenerated automatically.</p>
+
+<table id="jobs" class="grid">
+  <thead><tr><th>Name</th><th>Mode</th><th>Cron</th><th>Next run</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>Add / edit job</h2>
+<div class="filters">
+  <label>Name <input id="j_name" placeholder="e.g. night-quick"></label>
+  <label>Mode
+    <select id="j_mode">
+      <option value="quick">quick</option>
+      <option value="regular">regular</option>
+      <option value="full">full</option>
+      <option value="refresh">refresh</option>
+    </select>
+  </label>
+  <label>Cron <input id="j_cron" placeholder="0 3 */2 * *" value="0 3 */2 * *"></label>
+  <button onclick="saveJob()">Save job</button>
+</div>
+<p class="muted">Cron format: <code>minute hour day-of-month month day-of-week</code>. Examples:
+  <code>7 */2 * * *</code> (every 2h), <code>0 3 */2 * *</code> (every 2 days at 03:00), <code>0 3 * * FRI</code> (Fridays 03:00).</p>
+
+<pre id="msg"></pre>
+<script>
+async function load(){
+  const r=await fetch('/api/scheduler'); const d=await r.json();
+  const tb=document.querySelector('#jobs tbody'); tb.innerHTML='';
+  (d.jobs||[]).forEach(j=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${j.name}</td><td>${j.mode}</td><td><code>${j.cron}</code></td>
+      <td class="muted">—</td>
+      <td><button onclick="delJob('${j.name}')">Remove</button></td>`;
+    tb.appendChild(tr);
+  });
+}
+async function saveJob(){
+  const name=document.getElementById('j_name').value.trim();
+  const mode=document.getElementById('j_mode').value;
+  const cron=document.getElementById('j_cron').value.trim();
+  if(!name){document.getElementById('msg').textContent='Name required';return;}
+  const r=await fetch('/api/scheduler',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name,mode,cron})});
+  const d=await r.json();
+  document.getElementById('msg').textContent=JSON.stringify(d);
+  load();
+}
+async function delJob(name){
+  const r=await fetch('/api/scheduler',{method:'DELETE',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name})});
+  const d=await r.json();
+  document.getElementById('msg').textContent=JSON.stringify(d);
+  load();
+}
+load();
+</script>
+{% endblock %}

@@ -1,0 +1,5 @@
+# M3U Playlist Processor — feed sources
+# One remote playlist URL per line. Lines starting with # are comments.
+# Local playlists can also be dropped into the playlist_dir (see config.yaml).
+
+https://iptv-org.github.io/iptv/index.m3u

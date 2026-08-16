@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<h2>Generate output</h2>
+<div class="filters">
+  <label><input type="checkbox" id="f_vlc" checked> VLC (.m3u)</label>
+  <label><input type="checkbox" id="f_kodi" checked> Kodi (.kodi.m3u)</label>
+  <label><input type="checkbox" id="f_tivimate" checked> TiviMate (.tivimate.m3u)</label>
+  <button onclick="generate()">Generate</button>
+</div>
+<div id="gen" class="muted"></div>
+<h2>Effective config</h2>
+<pre>{{ cfg | tojson(indent=2) }}</pre>
+<script>
+function generate(){
+  const fm=[];
+  if(document.getElementById('f_vlc').checked) fm.push('vlc');
+  if(document.getElementById('f_kodi').checked) fm.push('kodi');
+  if(document.getElementById('f_tivimate').checked) fm.push('tivimate');
+  fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({formats:fm})}).then(r=>r.json()).then(j=>{
+      document.getElementById('gen').textContent=JSON.stringify(j.files,null,2);
+    });
+}
+</script>
+{% endblock %}

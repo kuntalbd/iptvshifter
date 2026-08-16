@@ -1,0 +1,22 @@
+# Example systemd unit (user service). Copy to ~/.config/systemd/user/ and
+# `systemctl --user daemon-reload && systemctl --user enable --now m3u-processor`.
+# Adjust WorkingDirectory / paths to your install. For Docker, use the image
+# instead (see docs/INSTALL_AND_USAGE.md).
+
+[Unit]
+Description=M3U Playlist Processor — Web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/m3u-processor
+ExecStart=/opt/m3u-processor/venv/bin/python3 -m m3u_processor --config /opt/m3u-processor/config.yaml serve --host 0.0.0.0 --port 50152
+Restart=on-failure
+RestartSec=10
+Nice=10
+MemoryMax=400M
+MemoryHigh=300M
+
+[Install]
+WantedBy=default.target

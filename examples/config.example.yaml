@@ -1,0 +1,154 @@
+# === Database ===
+database:
+  path: "./data/m3u.db"
+  backup_on_start: true
+  backup_keep: 7
+
+# === Input Sources ===
+sources:
+  feed_file: "./feeds.txt"
+  playlist_dir: "./playlists"
+  recursive_scan: true
+  file_patterns: ["*.m3u", "*.m3u8", "*.txt"]
+
+# === Output ===
+output:
+  dir: "./output"
+  working_filename: "working"        # base name; extensions (.m3u/.kodi.m3u/.tivimate.m3u) appended
+  formats: ["vlc", "kodi", "tivimate"]   # which player variants to generate
+  generate_aux_files: true
+  sort_by: "group_title"             # group_title | name | domain
+  uncategorized_label: "Uncategorized"
+
+# === Validation ===
+validation:
+  mode: "quick"
+  workers: 20
+  max_workers: 50
+  timeout_connect: 10
+  timeout_read: 15
+  retries: 2
+  backoff: [2, 4, 8]
+  per_host_limit: 5
+  user_agent_rotation: true
+  follow_redirects: true
+  max_redirects: 5
+  verify_ssl: true
+  token_refresh: true                  # C1 HYBRID: re-extract fresh token on 403 of tokened URL (OFF in Quick mode)
+  max_token_refetch_per_feed: 1        # cap remote re-fetches per source feed per run (thundering-herd guard)
+  strip_query_params:               # rotating-token params stripped from DEDUPE KEY only
+    # MUST stay in sync with parser.py ROTATING_TOKEN_PARAMS (single source of truth)
+    - "token"
+    - "sig"
+    - "signature"
+    - "sign"
+    - "token2"
+    - "auth"
+    - "expires"
+    - "md5"
+    - "hmac"
+    - "nonce"
+    - "ts"
+    - "key"
+    - "hdnea"
+
+# === Blacklist ===
+blacklist:
+  short_threshold: 3
+  permanent_inactive_days: 30
+  permanent_failure_threshold: 10
+  escalate_enabled: true
+  purge_unchecked_days: 90
+
+# === Providers (Domains) ===
+providers:
+  aggregate_subdomains: true
+  auto_create: true
+
+# === Web UI ===
+webui:
+  enabled: true
+  host: "0.0.0.0"
+  port: 50152
+  auth_token_file: "./webui_token.txt"
+
+# === Scheduler ===
+# Multi-job schedule. Each job = a named run with its own mode + cron.
+# systemd timers (or cron) are generated per job by scripts/install.sh /
+# `python -m m3u_processor.deploy`, and are REBOOT-PERSISTENT (the timer keeps
+# its next-trigger across reboots; the per-job counter does NOT reset).
+scheduler:
+  enabled: true
+  jobs:
+    - name: "token-refresh"      # re-fetch expiring (tokened) working URLs
+      mode: "refresh"
+      cron: "7 */2 * * *"        # every 2 hours
+    - name: "quick-run"          # quick validation pass, published to GitHub
+      mode: "quick"
+      cron: "0 3 */2 * *"        # every 2 days at 03:00
+
+
+# === Logging ===
+logging:
+  level: "INFO"
+  json_format: false
+  file: "./logs/m3u-processor.log"
+  max_bytes: 10485760
+  backup_count: 5
+
+# === Quality / health checking (buffer detection) ===
+# Both Option A (latency) and Option B (throughput) are independently
+# enable/disable-able. Disabled = bypassed (no extra probe, no health data).
+quality:
+  latency_check: true              # Option A on/off
+  healthy_max_ms: 2000             # elapsed < 2000ms -> healthy
+  medium_max_ms: 5000              # 2000..5000ms   -> medium; >5000ms -> slow
+  throughput_check: true           # Option B on/off
+  throughput_sample_seconds: 3     # seconds to download for throughput measure
+  throughput_min_kbps: 500         # measured < 500 KB/s -> unhealthy (buffer)
+  mark_in_group_title: false       # prefix ⭐ healthy / 🐢 slow in group-title
+  separate_healthy_file: false     # also write healthy.m3u (healthy-only)
+
+# === Categories (group normalization) ===
+# Collapse messy playlist labels into a SMALL curated taxonomy (<=20 groups).
+# Genre groups are checked BEFORE country groups (genre > country priority),
+# so "Bangladesh News" lands in News. `unknown` is the catch-all.
+# The `categories:` block is fully editable — tune aliases without touching code.
+# (Built-in defaults apply if this block is omitted.)
+categories:
+  unknown: "Other"
+  genre:
+    News: ["news", "বার্তা", "cnn", "bbc", "aljazeera", "france24", "sky", "ntv news", "সংবাদ"]
+    Sports: ["sports", "sport", "খেলা", "cricket", "football", "epl", "ufc", "wwe", "psl", "স্পোর্টস", "live sports"]
+    Movies: ["movies", "movie", "cinema", "bollywood", "hollywood", "hd movies", "সিনেমা", "film"]
+    Entertainment: ["ent", "general", "drama", "comedy", "series", "reality", "tv shows", "লাইভ", "entertainment", "গল্প"]
+    Kids: ["kids", "children", "cartoon", "নাটিকা", "animation", "শিশু", "baby"]
+    Music: ["music", "songs", "গান", "mtv", "বাংলা গান", "melody"]
+    Religious: ["islam", "quran", "naat", "christian", "gospel", "spiritual", "ইসলাম", "ধর্ম"]
+    Documentary: ["doc", "documentary", "nature", "discovery", "history", "science"]
+    Education: ["education", "learning", "tutorial", "ক্লাস"]
+  country:
+    Bangladesh: ["bangla", "banglaiptv", "bangladeshi", "bangladesh", "bd", "bd tv", "bdix", "deshi", "বাংলা", "টিভি", "bangla tv"]
+    India: ["india", "indian", "hindi", "tamil", "telugu", "desi", "बॉलीवुड", "ind"]
+    South Korea and China: ["korea", "korean", "south korea", "china", "chinese", "cctv", "kbs", "sbs", "hk", "k-drama", "cdrama"]
+    USA: ["usa", "us", "america", "american", "u.s.", "abc", "nbc", "fox", "hbo", "cbs"]
+    International: ["uk", "france", "french", "arabic", "turkey", "turkish", "germany", "russia", "world", "europe", "canada", "spanish", "italy", "japan", "thai"]
+
+# === Auto-publish finished outputs to the public git repo ===
+# After EVERY run (any mode), files in `output.dir` are copied into
+# `target_dir` (relative to this config file's dir -> repo-root out/) and
+# committed + pushed. Credentials + repo URL are read from the `.env` file
+# (GITHUB_USER / GITHUB_PAT / GITHUB_REPO_URL) — never hardcoded here.
+# The secret is supplied to git via a throwaway GIT_ASKPASS helper and never
+# logged. For Docker, mount your `.env` at /config/.env and set `auth_file`
+# (or rely on the env vars, which take precedence).
+publish:
+  enabled: true
+  target_dir: "../out"          # relative to this config file -> repo root out/
+  git:
+    enabled: true
+    remote: "origin"
+    branch: "main"
+    # auth_file is optional; env GITHUB_USER/GITHUB_PAT/GITHUB_REPO_URL win.
+    # auth_file: "/config/.env"
+    # repo_url: "https://github.com/you/iptvshifter.git"   # or GITHUB_REPO_URL env

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Streams{% endblock %}
+{% block content %}
+<h1>Streams</h1>
+<div class="filters">
+  <input id="q" placeholder="search name / url" oninput="loadStreams()">
+  <select id="tier" onchange="loadStreams()">
+    <option value="">all tiers</option>
+    <option value="none">none</option>
+    <option value="short">short</option>
+    <option value="permanent">permanent</option>
+  </select>
+  <select id="working" onchange="loadStreams()">
+    <option value="">any</option>
+    <option value="1">working</option>
+    <option value="0">not working</option>
+  </select>
+  <select id="health" onchange="loadStreams()">
+    <option value="">any health</option>
+    <option value="healthy">⭐ healthy</option>
+    <option value="medium">⚠️ medium</option>
+    <option value="slow">🐢 slow</option>
+    <option value="unknown">? unmeasured</option>
+  </select>
+</div>
+<div style="display:flex; gap:1rem; align-items:flex-start;">
+  <table class="tbl" id="streams" style="flex:1;">
+    <thead><tr><th>Name</th><th>Provider</th><th>Tier</th><th>Health</th><th>Working</th><th>Checked</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <aside id="detail" class="detail" style="width:340px;"></aside>
+</div>
+<script>
+const ICON={healthy:'⭐',medium:'⚠️',slow:'🐢',unknown:'?'};
+function loadStreams(){
+  const q=document.getElementById('q').value;
+  const tier=document.getElementById('tier').value;
+  const working=document.getElementById('working').value;
+  const health=document.getElementById('health').value;
+  const u=`/api/streams?q=${encodeURIComponent(q)}&tier=${tier}&working=${working}&health=${health}`;
+  fetch(u).then(r=>r.json()).then(rows=>{
+    const tb=document.querySelector('#streams tbody');
+    tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}" onclick="showDetail(${r.id})">
+      <td>${esc(r.name)}</td><td>${esc(r.provider_domain)}</td>
+      <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
+      <td>${ICON[r.health_tier]||'?'}${r.health_score!=null?(' '+Math.round(r.health_score)):''}</td>
+      <td>${r.is_working===1?'✔':(r.is_working===0?'✘':'?')}</td>
+      <td>${r.last_checked||''}</td></tr>`).join('');
+  });
+}
+function showDetail(id){
+  fetch(`/api/streams?q=`).then(r=>r.json()).then(rows=>{
+    const r=rows.find(x=>x.id===id); if(!r) return;
+    const d=document.getElementById('detail');
+    d.innerHTML=`<h3>${esc(r.name)}</h3>
+      <div class="kv"><span>Provider</span><b>${esc(r.provider_domain)}</b></div>
+      <div class="kv"><span>Tier</span><b>${r.blacklist_tier}</b></div>
+      <div class="kv"><span>Health</span><b>${ICON[r.health_tier]||'?'}</b></div>
+      <div class="kv"><span>Score</span><b>${r.health_score!=null?Math.round(r.health_score):'-'}</b></div>
+      <div class="urlbox"><code>${esc(r.original_url||r.url)}</code>
+        <button onclick="copyUrl(this)">copy</button></div>
+      <button class="btn danger" onclick="disableProvider('${esc(r.provider_domain)}')">disable provider</button>
+      <button class="btn" onclick="loadStreams()">close</button>`;
+  });
+}
+function copyUrl(btn){
+  const url=btn.parentElement.querySelector('code').textContent;
+  navigator.clipboard.writeText(url).then(()=>{btn.textContent='copied!';setTimeout(()=>btn.textContent='copy',1200);});
+}
+function disableProvider(domain){
+  if(!confirm('Disable provider '+domain+'?')) return;
+  fetch('/api/provider/disable',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({domain,reason:'web'})}).then(()=>{alert('disabled '+domain);loadStreams();});
+}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+// honor ?health= / ?working= deep links
+const p=new URLSearchParams(location.search);
+if(p.get('health')) document.getElementById('health').value=p.get('health');
+if(p.get('working')) document.getElementById('working').value=p.get('working');
+loadStreams();
+</script>
+{% endblock %}

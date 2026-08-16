@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Blacklist{% endblock %}
+{% block content %}
+<h1>Blacklist</h1>
+<div class="filters">
+  <select id="tier" onchange="loadBL()">
+    <option value="permanent">permanent</option>
+    <option value="short">short</option>
+  </select>
+</div>
+<table class="tbl" id="bl">
+  <thead><tr><th>Name</th><th>Provider</th><th>Tier</th><th>Reason</th></tr></thead>
+  <tbody></tbody>
+</table>
+<script>
+function loadBL(){
+  const tier=document.getElementById('tier').value;
+  fetch(`/api/streams?tier=${tier}&limit=500`).then(r=>r.json()).then(rows=>{
+    const tb=document.querySelector('#bl tbody');
+    tb.innerHTML=rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.provider_domain)}</td>
+      <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
+      <td>${esc(r.blacklist_reason||'')}</td></tr>`).join('');
+  });
+}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+loadBL();
+</script>
+{% endblock %}

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Run{% endblock %}
+{% block content %}
+<h1>Run validation</h1>
+
+<div id="active-warn" class="banner hidden">A run is already active (<span id="active-mode"></span>). New runs will be <b>discarded</b> until it finishes — or you can <button id="stop-btn" onclick="stopRun()">Stop active run</button>.</div>
+
+<div class="filters">
+  <label>Scheduler job
+    <select id="job"><option value="">— manual mode —</option></select>
+  </label>
+  <label>Mode
+    <select id="mode">
+      <option value="quick">quick</option>
+      <option value="regular">regular</option>
+      <option value="full">full</option>
+      <option value="refresh">refresh (tokened+working)</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="token_refresh"> Token refresh (stale-token re-extract)</label>
+  <button onclick="startRun()">Start</button>
+</div>
+<p class="muted">Pick a <b>scheduler job</b> to run it with its configured mode, or choose a manual mode.
+  Only <b>one run</b> executes at a time — if another is active, your start is recorded as <code>discarded</code> with a reason.</p>
+
+<div id="progress" class="muted">idle</div>
+<pre id="result"></pre>
+
+<h2>Active run</h2>
+<div id="live-box" class="muted">use the Live page to watch progress</div>
+<button id="stop2" onclick="stopRun()">Stop active run</button>
+
+<script>
+let es=null;
+async function refreshJobs(){
+  const r=await fetch('/api/scheduler'); const d=await r.json();
+  const sel=document.getElementById('job');
+  (d.jobs||[]).forEach(j=>{
+    const o=document.createElement('option');
+    o.value=j.name; o.textContent=`${j.name} (${j.mode})`;
+    sel.appendChild(o);
+  });
+}
+async function refreshActive(){
+  const r=await fetch('/api/run-status'); const d=await r.json();
+  const warn=document.getElementById('active-warn');
+  if(d.active){
+    warn.classList.remove('hidden');
+    document.getElementById('active-mode').textContent=d.mode;
+  } else warn.classList.add('hidden');
+}
+function startRun(){
+  const job=document.getElementById('job').value;
+  const mode=document.getElementById('mode').value;
+  const tr=document.getElementById('token_refresh').checked;
+  document.getElementById('result').textContent='';
+  const body=job?{job,token_refresh:tr}:{mode,token_refresh:tr};
+  fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)})
+    .then(r=>r.json()).then(j=>{
+      document.getElementById('progress').textContent='run '+j.run_id+' started (mode='+j.mode+')…';
+      if(es) es.close();
+      es=new EventSource('/api/events?run_id='+encodeURIComponent(j.run_id));
+      es.onmessage=e=>{
+        const d=JSON.parse(e.data);
+        if(d.type==='progress') document.getElementById('progress').textContent=`${d.done}/${d.total}`;
+        else if(d.type==='discarded'){ document.getElementById('progress').textContent='DISCARDED'; document.getElementById('result').textContent='Reason: '+d.reason; es.close(); refreshActive(); }
+        else if(d.type==='done'){ document.getElementById('progress').textContent='done'; document.getElementById('result').textContent=JSON.stringify(d.stats,null,2); es.close(); refreshActive(); }
+        else if(d.type==='error'){ document.getElementById('progress').textContent='error'; document.getElementById('result').textContent=d.message; es.close(); }
+      };
+    });
+}
+async function stopRun(){
+  const r=await fetch('/api/run/stop',{method:'POST'});
+  const d=await r.json();
+  document.getElementById('result').textContent=JSON.stringify(d);
+  setTimeout(refreshActive,1500);
+}
+refreshJobs(); refreshActive();
+setInterval(refreshActive, 10000);
+</script>
+{% endblock %}

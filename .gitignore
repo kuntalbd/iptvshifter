@@ -1,0 +1,60 @@
+# ===== M3U Playlist Processor — public repo ignore rules =====
+# Publish the SOURCE + docs + examples + Dockerfile. Keep secrets, local
+# databases, generated playlists, and private deployment out of git.
+
+# ---- Secrets / credentials (NEVER commit) ----
+.env
+*.env
+config/.env
+**/.env
+auth*.txt
+webui_token.txt
+soft-data/
+
+# ---- Local database (sqlite) ----
+*.db
+*.db-shm
+*.db-wal
+data/
+prod/data/
+backups/
+**/backups/
+
+# ---- Generated output playlists (user's private channels) ----
+out/
+prod/out/
+output/
+playlists/
+prod/playlists/
+
+# ---- Private production deployment (absolute paths, real feeds) ----
+prod/
+_deploy*/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Logs ----
+logs/
+*.log
+
+# ---- Internal-only specs / QA plans (not for public) ----
+requirement/
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
