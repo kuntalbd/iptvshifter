@@ -1,1 +1,6 @@
 #EXTM3U
+# === Other ===
+#EXTINF:-1 group-title="Other",RTMP
+rtmp://example.com/live/s
+#EXTINF:-1 group-title="Other",Working
+http://example.com/ok/master.m3u8
