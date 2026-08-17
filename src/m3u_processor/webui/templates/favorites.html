@@ -3,7 +3,8 @@
 {% block content %}
 <h1>Favorites</h1>
 <p class="muted">A separate, user-curated list. Regular pipeline runs do NOT touch these.
-Validate / export manually from here.</p>
+Token refresh + export happen automatically in <b>refresh mode</b>. Here you can add / edit / delete,
+enable-disable, and manually validate.</p>
 
 <div class="filters">
   <input id="q" placeholder="search name / url" oninput="loadFav()">
@@ -18,19 +19,7 @@ Validate / export manually from here.</p>
   </select>
   <button class="btn" onclick="loadFav()">filter</button>
   <button class="btn" onclick="validateNow()">validate now</button>
-  <button class="btn" onclick="toggleExport()">export ▾</button>
-</div>
-
-<div id="export-box" class="box hidden">
-  <label><input type="checkbox" id="inc-disabled"> include disabled</label>
-  <label><input type="checkbox" id="inc-notworking"> include not working</label>
-  <div>
-    <label><input type="checkbox" value="vlc" checked> vlc</label>
-    <label><input type="checkbox" value="kodi" checked> kodi</label>
-    <label><input type="checkbox" value="tivimate" checked> tivimate</label>
-  </div>
-  <button class="btn primary" onclick="doExport()">generate favorite.m3u &amp; push</button>
-  <span id="export-msg" class="msg"></span>
+  <label class="chk"><input type="checkbox" id="inc-disabled-validate"> include disabled</label>
 </div>
 
 <div id="batch-box" class="box hidden">
@@ -46,7 +35,7 @@ Validate / export manually from here.</p>
   <thead><tr>
     <th><input type="checkbox" id="sel-all" onchange="selAll(this)"></th>
     <th>Name</th><th>URL</th><th>Groups</th><th>Enabled</th><th>Working</th>
-    <th>Last Working</th><th>Consec Fail</th><th>Total Fail</th>
+    <th>Last Working</th><th>Consec Fail</th><th>Total Fail</th><th>Consec Pass</th><th>Total Pass</th><th>Source</th><th></th>
   </tr></thead>
   <tbody></tbody>
 </table>
@@ -57,14 +46,28 @@ Validate / export manually from here.</p>
   <input id="a-url" placeholder="playable URL (may contain token)" style="width:340px">
   <input id="a-origin" placeholder="origin URL (tokenless base, optional)" style="width:280px">
   <input id="a-group" placeholder="group (optional)" style="width:160px">
-  <label><input type="checkbox" id="a-refresh"> token refresh</label>
+  <input id="a-source" placeholder="source path/URL for refresh (optional)" style="width:300px">
+  <label class="chk"><input type="checkbox" id="a-isurl"> source is URL</label>
+  <label class="chk"><input type="checkbox" id="a-enabled" checked> enabled</label>
   <button class="btn primary" onclick="addFav(false)">add</button>
   <button class="btn" onclick="addFav(true)">+ from existing stream</button>
   <span id="add-msg" class="msg"></span>
 </div>
 
+<div id="edit-box" class="box hidden">
+  <h3>Edit favorite <span id="edit-id" class="muted"></span></h3>
+  <input id="e-name" placeholder="name">
+  <input id="e-group" placeholder="group" style="width:160px">
+  <input id="e-source" placeholder="source path/an URL for refresh" style="width:300px">
+  <label class="chk"><input type="checkbox" id="e-isurl"> source is URL</label>
+  <label class="chk"><input type="checkbox" id="e-enabled"> enabled</label>
+  <button class="btn primary" onclick="saveEdit()">save</button>
+  <button class="btn" onclick="closeEdit()">cancel</button>
+  <span id="edit-msg" class="msg"></span>
+</div>
+
 <script>
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function loadFav(){
   const q=document.getElementById('q').value;
   const w=document.getElementById('working').value;
@@ -81,7 +84,12 @@ function loadFav(){
       <td>${r.is_working===1?'✔':(r.is_working===0?'✘':'?')}</td>
       <td>${r.last_working||''}</td>
       <td class="${r.consecutive_failures>0?'warn':''}">${r.consecutive_failures||0}</td>
-      <td class="${r.total_failures>0?'warn':''}">${r.total_failures||0}</td></tr>`).join('');
+      <td class="${r.total_failures>0?'warn':''}">${r.total_failures||0}</td>
+      <td class="${r.consecutive_pass>0?'ok':''}">${r.consecutive_pass||0}</td>
+      <td class="${r.total_pass>0?'ok':''}">${r.total_pass||0}</td>
+      <td class="sm">${esc(r.source_path)}</td>
+      <td><button class="btn sm" onclick="openEdit(${r.id})">edit</button></td>
+    </tr>`).join('');
     refreshSelCount();
   });
   loadGroups();
@@ -103,20 +111,10 @@ function refreshSelCount(){
 function selAll(el){document.querySelectorAll('.sel').forEach(c=>c.checked=el.checked);refreshSelCount();}
 document.addEventListener('change',e=>{if(e.target.classList.contains('sel'))refreshSelCount();});
 function validateNow(){
-  fetch('/api/favorites/validate-now',{method:'POST'}).then(r=>r.json()).then(d=>{
+  const body={include_disabled:document.getElementById('inc-disabled-validate').checked};
+  fetch('/api/favorites/validate-now',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json()).then(d=>{
     alert(d.ok?(d.checked+' favorites validated'):('error: '+d.error));loadFav();
   });
-}
-function toggleExport(){document.getElementById('export-box').classList.toggle('hidden');}
-function doExport(){
-  const fmts=[...document.querySelectorAll('#export-box input[value]')].filter(c=>c.checked).map(c=>c.value);
-  const body={include_disabled:document.getElementById('inc-disabled').checked,
-              include_notworking:document.getElementById('inc-notworking').checked,formats:fmts};
-  fetch('/api/favorites/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(r=>r.json()).then(d=>{
-      document.getElementById('export-msg').textContent=d.ok?'exported & pushed ✓':('error: '+d.error);
-      if(d.ok)loadFav();
-    });
 }
 function batchGroup(){
   const g=document.getElementById('batch-group').value.trim();
@@ -139,15 +137,44 @@ function addFav(fromExisting){
   const url=document.getElementById('a-url').value.trim();
   if(!url)return alert('URL required');
   const body={url,name:document.getElementById('a-name').value.trim(),
-    origin_url:document.getElementById('a-origin').value.trim(),
+    original_url:document.getElementById('a-origin').value.trim(),
     group:document.getElementById('a-group').value.trim(),
-    token_refresh_enabled:document.getElementById('a-refresh').checked};
+    source_path:document.getElementById('a-source').value.trim(),
+    is_url:document.getElementById('a-isurl').checked,
+    is_enabled:document.getElementById('a-enabled').checked};
   const ep=fromExisting?'/api/favorites/add-existing':'/api/favorites/add';
   fetch(ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(d=>{
       document.getElementById('add-msg').textContent=d.ok?'added ✓':'error: '+(d.error||'unknown');
-      if(d.ok){['a-name','a-url','a-origin','a-group'].forEach(i=>document.getElementById(i).value='');
-        document.getElementById('a-refresh').checked=false;loadFav();}
+      if(d.ok){['a-name','a-url','a-origin','a-group','a-source'].forEach(i=>document.getElementById(i).value='');
+        document.getElementById('a-isurl').checked=false;loadFav();}
+    });
+}
+function openEdit(id){
+  fetch('/api/favorites').then(r=>r.json()).then(rows=>{
+    const r=rows.find(x=>x.id===id); if(!r)return;
+    document.getElementById('edit-id').textContent='#'+id;
+    document.getElementById('e-name').value=r.name||'';
+    document.getElementById('e-group').value=(r.groups||'').split(',')[0]||'';
+    document.getElementById('e-source').value=r.source_path||'';
+    document.getElementById('e-isurl').checked=!!r.is_url;
+    document.getElementById('e-enabled').checked=!!r.is_enabled;
+    document.getElementById('edit-box').classList.remove('hidden');
+    document.getElementById('edit-box').dataset.id=id;
+  });
+}
+function closeEdit(){document.getElementById('edit-box').classList.add('hidden');}
+function saveEdit(){
+  const id=+document.getElementById('edit-box').dataset.id;
+  const body={id,name:document.getElementById('e-name').value,
+    group_title:document.getElementById('e-group').value,
+    source_path:document.getElementById('e-source').value,
+    is_url:document.getElementById('e-isurl').checked,
+    is_enabled:document.getElementById('e-enabled').checked};
+  fetch('/api/favorites/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(d=>{
+      document.getElementById('edit-msg').textContent=d.ok?'saved ✓':'error: '+(d.error||'unknown');
+      if(d.ok){closeEdit();loadFav();}
     });
 }
 loadFav();

@@ -23,6 +23,8 @@ class Stream:
     last_working: Optional[str] = None
     consecutive_failures: int = 0
     total_failures: int = 0
+    consecutive_pass: int = 0
+    total_pass: int = 0
     total_successes: int = 0
 
     # blacklist

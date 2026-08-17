@@ -126,6 +126,7 @@ class Orchestrator:
         rows = self.db.query(
             "SELECT id, url, original_url, provider_domain, source_type, source_path, "
             "attributes, enabled, total_failures, consecutive_failures, last_working, "
+            "consecutive_pass, total_pass, "
             "blacklist_tier, blacklisted_at, blacklist_reason, is_working "
             f"FROM streams WHERE {where}"
         )
@@ -217,6 +218,7 @@ class Orchestrator:
             q = (
                 "SELECT id, url, original_url, provider_domain, source_type, source_path, "
                 "attributes, enabled, total_failures, consecutive_failures, last_working, "
+                "consecutive_pass, total_pass, "
                 "blacklist_tier, blacklisted_at, blacklist_reason, is_working "
                 f"FROM streams WHERE {MODE_ELIGIBILITY[mode]} AND ({like})"
             )
@@ -251,6 +253,9 @@ class Orchestrator:
                 self.stats["token_refreshed"] = self._refresh_tokens_batched()
                 done = total
                 self._persist_progress(done, total)
+                # Part B: refresh favorite tokens, then export favorite.*.m3u
+                self.stats["favorite_token_refreshed"] = self._refresh_favorite_tokens()
+                self._export_favorites_to_out()
                 # record last refresh time (audit; scheduling authority = systemd timer)
                 self.db.execute(
                     "INSERT OR REPLACE INTO config(key, value) VALUES('last_refresh_at', ?)",
@@ -349,6 +354,8 @@ class Orchestrator:
             attributes=json.loads(row["attributes"] or "{}"),
             total_failures=row["total_failures"] or 0,
             consecutive_failures=row["consecutive_failures"] or 0,
+            total_pass=row["total_pass"] or 0,
+            consecutive_pass=row["consecutive_pass"] or 0,
             last_working=row["last_working"],
             blacklist_tier=row["blacklist_tier"] or "none",
             blacklisted_at=row["blacklisted_at"],
@@ -381,10 +388,12 @@ class Orchestrator:
         self.db.execute(
             """UPDATE streams SET is_working=?, last_checked=CURRENT_TIMESTAMP,
                last_working=?, consecutive_failures=?, total_failures=?, total_successes=?,
+               consecutive_pass=?, total_pass=?,
                blacklist_tier=?, blacklisted_at=?, blacklist_reason=?, original_url=?,
                health_score=?, health_tier=?, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
             (stream.is_working, stream.last_working, stream.consecutive_failures,
-             stream.total_failures, stream.total_successes, stream.blacklist_tier,
+             stream.total_failures, stream.total_successes, stream.consecutive_pass,
+             stream.total_pass, stream.blacklist_tier,
              stream.blacklisted_at, stream.blacklist_reason, stream.original_url,
              health_score, health_tier, stream.id),
         )
@@ -481,6 +490,96 @@ class Orchestrator:
                     refreshed += 1
         self.db.commit()
         return refreshed
+
+    def _refresh_favorite_tokens(self) -> int:
+        """Refresh-mode Part B(1): re-extract fresh tokens for enabled favorites
+        that carry a tokened URL, using each favorite's own source (copied from
+        the originating stream). Mirrors _refresh_tokens_batched but for the
+        favorites table. Returns count of favorites refreshed."""
+        from .parser import PlaylistParser
+        # Select favorites that have a source to re-extract from. The join key
+        # for matching is the tokenless `url` (the tokened playable value lives
+        # in `original_url`). NOTE: do NOT filter on `url LIKE '%?%'` here —
+        # in production `url` is the normalized tokenless key, so that filter
+        # would match nothing and favorites would never refresh.
+        rows = self.db.query(
+            "SELECT id, url, original_url, source_path, is_url FROM favorites "
+            "WHERE is_enabled=1 AND source_path IS NOT NULL AND source_path != ''"
+        )
+        if not rows:
+            return 0
+        # group by source
+        by_source: dict = {}
+        for r in rows:
+            if not r["source_path"]:
+                continue  # no source -> final URL, nothing to re-extract
+            by_source.setdefault((r["source_path"], r["is_url"]), []).append(r)
+
+        refreshed = 0
+        for (src, is_url), frows in by_source.items():
+            text = None
+            if is_url:
+                try:
+                    import requests
+                    resp = requests.get(src, timeout=30)
+                    resp.raise_for_status()
+                    text = resp.text
+                except Exception as e:
+                    self.db.log_error(self.run_id, "fav_source_fetch_failed",
+                                     f"{type(e).__name__}: {e}", src)
+                    continue
+            else:
+                if not os.path.isfile(src):
+                    self.db.log_error(self.run_id, "fav_source_missing",
+                                     "local file not found", src)
+                    continue
+                try:
+                    with open(src, "r", encoding="utf-8", errors="replace") as f:
+                        text = f.read()
+                except Exception as e:
+                    self.db.log_error(self.run_id, "fav_source_read_failed",
+                                     f"{type(e).__name__}: {e}", src)
+                    continue
+            try:
+                parser = PlaylistParser(
+                    aggregate_subdomains=bool(self.config.get("providers.aggregate_subdomains", True))
+                )
+                entries = parser.parse_text(text, source_type="remote" if is_url else "local",
+                                            source_path=src, base_url=src if is_url else None)
+            except Exception:
+                continue
+            fresh_map = {self._norm_url(e.url): e.original_url for e in entries}
+            for r in frows:
+                new = fresh_map.get(self._norm_url(r["url"]))
+                if new and new != r["original_url"]:
+                    self.db.execute(
+                        "UPDATE favorites SET original_url=? WHERE id=?",
+                        (new, r["id"]),
+                    )
+                    refreshed += 1
+        self.db.commit()
+        return refreshed
+
+    def _export_favorites_to_out(self):
+        """Refresh-mode Part B(2): write favorite.*.m3u (tokenless url key)
+        for enabled favorites into output dir, then let publish push it."""
+        from .writers import write_favorites
+        out = self.config.get("output.dir", "./out")
+        rows = self.db.query(
+            "SELECT name, url, original_url, "
+            "(SELECT GROUP_CONCAT(g.name) FROM favorite_membership m "
+            " JOIN favorite_groups g ON g.id=m.group_id WHERE m.favorite_id=favorites.id) AS groups "
+            "FROM favorites WHERE is_enabled=1"
+        )
+        # SECURITY: publish the tokenless `url` key — never `original_url`
+        # (which may carry a live token, e.g. after refresh re-extraction or a
+        # manual tokened add). `original_url` is only for internal validate/refresh.
+        results = write_favorites(
+            rows, out,
+            formats=self.config.get("output.formats", ["vlc", "kodi", "tivimate"]),
+        )
+        self.stats["favorite_files"] = list(results.keys())
+        return results
 
     def _count_transition(self, t):
         e = t.get("event")

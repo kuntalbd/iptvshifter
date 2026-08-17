@@ -67,6 +67,7 @@ def _get_db(cfg):
 
 def create_app(cfg):
     app = FastAPI(title="M3U Playlist Processor", version=__version__)
+    app.state.cfg = cfg
 
     # templates (lazy import to avoid hard dep if not used)
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -430,7 +431,8 @@ def create_app(cfg):
                 params.extend([f"%{q}%", f"%{q}%"])
             sql = ("SELECT id, name, url, original_url, provider_domain, blacklist_tier, "
                    "is_working, health_tier, health_score, last_checked, "
-                   "last_working, total_failures, consecutive_failures FROM streams WHERE "
+                   "last_working, total_failures, consecutive_failures, "
+                   "consecutive_pass, total_pass FROM streams WHERE "
                    + " AND ".join(wheres) +
                    " ORDER BY id LIMIT ? OFFSET ?")
             params.extend([limit, offset])
@@ -558,14 +560,17 @@ def create_app(cfg):
             for r in rows:
                 out.append({
                     "id": r["id"], "name": r["name"], "url": r["url"],
-                    "origin_url": r["origin_url"], "groups": r["groups"] or "",
+                    "original_url": r["original_url"], "groups": r["groups"] or "",
                     "is_enabled": bool(r["is_enabled"]),
                     "is_working": r["is_working"],
                     "last_working": r["last_working"],
+                    "source_path": r["source_path"] or "",
+                    "is_url": bool(r["is_url"]),
                     "total_failures": r["total_failures"],
                     "consecutive_failures": r["consecutive_failures"],
+                    "total_pass": r["total_pass"],
+                    "consecutive_pass": r["consecutive_pass"],
                     "total_successes": r["total_successes"],
-                    "token_refresh_enabled": bool(r["token_refresh_enabled"]),
                 })
             return out
         finally:
@@ -579,9 +584,11 @@ def create_app(cfg):
             fid = db.favorite_add(
                 name=body.get("name", ""),
                 url=body["url"],
-                origin_url=body.get("origin_url", ""),
+                original_url=body.get("original_url", ""),
                 group_title=body.get("group", ""),
-                token_refresh_enabled=bool(body.get("token_refresh_enabled", False)),
+                source_path=body.get("source_path", ""),
+                is_url=bool(body.get("is_url", False)),
+                is_enabled=bool(body.get("is_enabled", True)),
             )
             if body.get("group"):
                 db.favorite_set_group([fid], body["group"])
@@ -600,11 +607,33 @@ def create_app(cfg):
                 stream_url=body["url"],
                 name=body.get("name", ""),
                 group_title=body.get("group", ""),
-                token_refresh_enabled=bool(body.get("token_refresh_enabled", False)),
             )
             if fid and body.get("group"):
                 db.favorite_set_group([fid], body["group"])
             return {"ok": True, "id": fid} if fid else {"ok": False, "error": "stream not found"}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/edit")
+    async def api_favorites_edit(req: Request):
+        """Edit an existing favorite (name, group, source_path, is_url, is_enabled)."""
+        body = await req.json()
+        db = _get_db(cfg)
+        try:
+            fid = body["id"]
+            db.favorite_edit(
+                fid,
+                name=body.get("name"),
+                group_title=body.get("group_title"),
+                source_path=body.get("source_path"),
+                is_url=body.get("is_url"),
+                is_enabled=body.get("is_enabled"),
+            )
+            if "group" in body:
+                db.favorite_set_group([fid], body["group"])
+            return {"ok": True, "id": fid}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
         finally:
             db.close()
 
@@ -643,12 +672,24 @@ def create_app(cfg):
             db.close()
 
     @app.post("/api/favorites/validate-now")
-    def api_favorites_validate_now():
-        """Validate all favorites (separate from main pipeline runs)."""
+    async def api_favorites_validate_now(req: Request = None):
+        """Validate favorites (separate from main pipeline runs). By default only
+        enabled items are checked; pass include_disabled=true to also check
+        disabled items."""
         db = _get_db(cfg)
         try:
-            rows = db.query(
-                "SELECT id, url, origin_url FROM favorites WHERE is_enabled=1")
+            include_disabled = False
+            if req is not None:
+                try:
+                    _b = await req.json() if hasattr(req, "json") else {}
+                    if _b.get("include_disabled"):
+                        include_disabled = True
+                except Exception:
+                    pass
+            sql = "SELECT id, url, original_url FROM favorites"
+            if not include_disabled:
+                sql += " WHERE is_enabled=1"
+            rows = db.query(sql)
             if not rows:
                 return {"ok": True, "checked": 0}
             from ..validator import StreamValidator
@@ -658,7 +699,7 @@ def create_app(cfg):
                 # Validate the PLAYABLE url (may carry a token) — that is what
                 # must actually be reachable. Validation is internal (no publish),
                 # so using the tokened url is correct here.
-                url = r["url"] or r["origin_url"]
+                url = r["url"] or r["original_url"]
                 res = validator.validate_one(
                     type("S", (), {"url": url, "original_url": url,
                                   "attributes": {}})())
@@ -673,85 +714,6 @@ def create_app(cfg):
             return {"ok": True, "checked": checked}
         except Exception as e:
             return {"ok": False, "error": str(e)}
-
-    @app.post("/api/favorites/export")
-    async def api_favorites_export(req: Request):
-        """Generate favorite.*.m3u into prod/out, copy to out/, push to GitHub."""
-        body = await req.json()
-        include_disabled = bool(body.get("include_disabled", False))
-        include_notworking = bool(body.get("include_notworking", False))
-        formats = body.get("formats", ["vlc", "kodi", "tivimate"])
-        db = _get_db(cfg)
-        try:
-            sql = ("SELECT f.name, f.url, f.origin_url, "
-                   "GROUP_CONCAT(g.name) AS groups "
-                   "FROM favorites f "
-                   "LEFT JOIN favorite_membership m ON m.favorite_id=f.id "
-                   "LEFT JOIN favorite_groups g ON g.id=m.group_id WHERE 1")
-            if not include_disabled:
-                sql += " AND is_enabled=1"
-            if not include_notworking:
-                sql += " AND is_working=1"
-            rows = db.query(sql)
-            if not rows:
-                return {"ok": False, "error": "no favorites to export"}
-            # Build M3U directly (favorites are simple url+name; no need for the
-            # full Stream-oriented write_streams which expects attributes/health).
-            # SECURITY: prefer origin_url (tokenless) so we never publish a
-            # tokened playable URL to the (possibly public) GitHub repo.
-            entries = []
-            for r in rows:
-                name = r["name"] or r["url"]
-                group = (r["groups"] or "").split(",")[0].strip() or ""
-                play_url = r["origin_url"] or r["url"]
-                entries.append((name, play_url, group))
-            outdir = cfg.get("output.dir", "./out")
-            os.makedirs(outdir, exist_ok=True)
-            results = {}
-            for fmt in formats:
-                if fmt == "vlc":
-                    lines = ["#EXTM3U"]
-                    for name, url, _ in entries:
-                        lines.append(f"#EXTINF:-1,{name}")
-                        lines.append(url)
-                    path = os.path.join(outdir, "favorite.m3u")
-                elif fmt == "kodi":
-                    lines = ["#EXTM3U"]
-                    for name, url, _ in entries:
-                        lines.append(f'#EXTINF:-1 tvg-name="{name}",{name}')
-                        lines.append(url)
-                    path = os.path.join(outdir, "favorite.kodi.m3u")
-                elif fmt == "tivimate":
-                    lines = ["#EXTM3U"]
-                    for name, url, _ in entries:
-                        lines.append(f"#EXTINF:-1 group-title=\"{_}\",{name}")
-                        lines.append(url + (f"|group-title={_}" if _ else ""))
-                    path = os.path.join(outdir, "favorite.tivimate.m3u")
-                else:
-                    continue
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(lines) + "\n")
-                results[fmt] = path
-            # Copy to repo out/ and push (same helper as main publish)
-            pub = cfg.get("publish") or {}
-            target = pub.get("target_dir", "../out")
-            if not os.path.isabs(target):
-                base_dir = getattr(cfg, "config_dir", "") or os.getcwd()
-                dst = os.path.normpath(os.path.join(base_dir, target))
-            else:
-                dst = target
-            import shutil
-            os.makedirs(dst, exist_ok=True)
-            for path in results.values():
-                shutil.copy2(path, os.path.join(dst, os.path.basename(path)))
-            from .. import publish as _publish
-            pub_result = _publish.publish_outputs(cfg, run_id="favorites-export")
-            return {"ok": True, "files": results,
-                    "published": pub_result.get("published", False)}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-        finally:
-            db.close()
 
     @app.post("/api/generate")
     async def api_generate(req: Request):

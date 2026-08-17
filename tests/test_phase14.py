@@ -1,7 +1,8 @@
 """Tests for the Favorites subsystem (§Fav): separate from the main pipeline.
 
-Covers: favorites table creation, add/list/enable/delete/group, validate-now
-(recording health), and export (m3u generation -> prod/out -> out/ -> publish).
+Covers: favorites table creation + schema migration, add/list/enable/delete/group,
+edit, validate-now (recording health, include-disabled toggle), refresh-mode Part B
+(favorite token refresh + favorite.m3u export into output dir), and pass counters.
 Also the `is_run_active` rename on /api/run-status and /api/live.
 """
 import os
@@ -100,28 +101,111 @@ def test_favorites_validate_uncheckable_not_counted_as_failure(client):
     assert row["total_failures"] == 0
 
 
-def test_favorites_export_writes_and_publishes(client, tmp_path):
+def test_favorites_pass_counters_track_on_validate(client, tmp_path):
     client.post("/api/favorites/add", json={"url": "http://x/a.m3u", "name": "A"})
-    r = client.post("/api/favorites/export",
-                    json={"include_disabled": True, "include_notworking": True})
-    j = r.json()
-    assert j["ok"], j
-    assert os.path.exists(os.path.join(str(tmp_path), "out", "favorite.m3u"))
-    # copied to target dir
-    assert os.path.exists(os.path.join(str(tmp_path), "repo_out", "favorite.m3u"))
+    fid = client.get("/api/favorites").json()[0]["id"]
+    # validate-now 2x (URL unreachable -> 2 failures)
+    client.post("/api/favorites/validate-now")
+    client.post("/api/favorites/validate-now")
+    row = client.get("/api/favorites").json()[0]
+    assert row["total_failures"] == 2 and row["consecutive_failures"] == 2
+    assert row["total_pass"] == 0 and row["consecutive_pass"] == 0
+    # simulate successes via direct record (deterministic) on the same DB
+    d = Database(client.app.state.cfg.get("database.path")); d.init_db(backup=False)
+    d.favorite_record_result(fid, ok=True)
+    d.favorite_record_result(fid, ok=True)
+    row = d.query("SELECT total_pass, consecutive_pass, total_failures, "
+                  "consecutive_failures FROM favorites WHERE id=?", (fid,))[0]
+    assert row["total_pass"] == 2 and row["consecutive_pass"] == 2
+    assert row["total_failures"] == 2  # failures accumulate
+    assert row["consecutive_failures"] == 0  # reset on success
+    d.close()
 
 
-def test_favorites_export_prefers_tokenless_origin(client, tmp_path):
-    # A tokened playable url must NOT be published; origin_url (tokenless) should.
-    client.post("/api/favorites/add", json={
-        "url": "http://x/a.m3u?token=SECRET123", "name": "A",
-        "origin_url": "http://x/a.m3u"})
-    r = client.post("/api/favorites/export",
-                    json={"include_disabled": True, "include_notworking": True})
+def test_favorites_validate_include_disabled_toggle(client):
+    client.post("/api/favorites/add", json={"url": "http://x/a.m3u", "name": "A"})
+    fid = client.get("/api/favorites").json()[0]["id"]
+    client.post("/api/favorites/set-enabled", json={"id": fid, "enabled": False})
+    # default: disabled excluded
+    r = client.post("/api/favorites/validate-now", json={"include_disabled": False})
+    assert r.json()["checked"] == 0
+    # include_disabled true: validated
+    r = client.post("/api/favorites/validate-now", json={"include_disabled": True})
+    assert r.json()["checked"] == 1
+
+
+def test_favorites_edit_endpoint(client):
+    client.post("/api/favorites/add", json={"url": "http://x/a.m3u", "name": "A"})
+    fid = client.get("/api/favorites").json()[0]["id"]
+    r = client.post("/api/favorites/edit", json={
+        "id": fid, "name": "A2", "source_path": "/s/x.m3u", "is_url": True,
+        "is_enabled": False})
     assert r.json()["ok"]
-    content = open(os.path.join(str(tmp_path), "out", "favorite.m3u")).read()
-    assert "SECRET123" not in content, "tokened url leaked into public m3u!"
+    row = client.get("/api/favorites").json()[0]
+    assert row["name"] == "A2"
+    assert row["source_path"] == "/s/x.m3u"
+    assert row["is_url"] is True
+    assert row["is_enabled"] is False
+
+
+def test_refresh_mode_part_b_refreshes_favorites_and_exports(tmp_path):
+    # Build a source playlist with a fresh token, seed a favorite pointing at it
+    # (enabled + tokened url), run refresh mode, and confirm the favorite's
+    # original_url is re-extracted AND favorite.m3u is written.
+    src = os.path.join(str(tmp_path), "src.m3u")
+    open(src, "w").write(
+        "#EXTM3U\n#EXTINF:-1,t\nhttp://x/a.m3u?token=NEW\n")
+    dbp = os.path.join(str(tmp_path), "m3u.db")
+    outd = os.path.join(str(tmp_path), "out")
+    cfgd = dict(cfg_mod.DEFAULTS)
+    cfgd["database"]["path"] = dbp
+    cfgd["output"]["dir"] = outd
+    cfgd["publish"] = {"enabled": False}
+    cpath = os.path.join(str(tmp_path), "config.yaml")
+    yaml.safe_dump(cfgd, open(cpath, "w"))
+    cfg = cfg_mod.load_config(config_path=cpath)
+    db = Database(dbp)
+    db.init_db(backup=False)
+    db.favorite_add(name="A", url="http://x/a.m3u", original_url="http://x/a.m3u?token=OLD",
+                    source_path=src, is_url=False)
+    from m3u_processor.orchestrator import Orchestrator
+    orch = Orchestrator(db, cfg)
+    stats = orch.run(mode="refresh")
+    assert stats["favorite_token_refreshed"] == 1, stats
+    row = db.query("SELECT original_url FROM favorites WHERE id=1")[0]
+    assert "token=NEW" in row["original_url"], row["original_url"]
+    assert os.path.exists(os.path.join(outd, "favorite.m3u"))
+    # SECURITY: published favorite.m3u must be TOKENLESS (url key), never the
+    # tokened original_url — even though refresh populated original_url with a
+    # fresh token.
+    content = open(os.path.join(outd, "favorite.m3u")).read()
+    assert "token=NEW" not in content, "tokened url leaked into public favorite.m3u!"
+    assert "token=OLD" not in content, "tokened url leaked into public favorite.m3u!"
     assert "http://x/a.m3u" in content
+    db.close()
+
+
+def test_favorites_published_m3u_is_tokenless_even_when_original_url_tokened(tmp_path):
+    # Manual add with a tokened original_url must NOT publish that token.
+    dbp = os.path.join(str(tmp_path), "m3u.db")
+    outd = os.path.join(str(tmp_path), "out")
+    cfgd = dict(cfg_mod.DEFAULTS)
+    cfgd["database"]["path"] = dbp
+    cfgd["output"]["dir"] = outd
+    cfgd["publish"] = {"enabled": False}
+    cpath = os.path.join(str(tmp_path), "config.yaml")
+    yaml.safe_dump(cfgd, open(cpath, "w"))
+    cfg = cfg_mod.load_config(config_path=cpath)
+    db = Database(dbp); db.init_db(backup=False)
+    db.favorite_add(name="A", url="http://x/a.m3u",
+                    original_url="http://x/a.m3u?token=SECRET", is_enabled=1)
+    from m3u_processor.orchestrator import Orchestrator
+    orch = Orchestrator(db, cfg)
+    orch.run(mode="refresh")
+    content = open(os.path.join(outd, "favorite.m3u")).read()
+    assert "SECRET" not in content, "tokened original_url leaked into public m3u!"
+    assert "http://x/a.m3u" in content
+    db.close()
 
 
 def test_run_status_uses_is_run_active(client):

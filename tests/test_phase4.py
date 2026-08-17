@@ -125,6 +125,27 @@ def test_fresh_eye_purge_old():
     db.close()
 
 
+def test_pass_counters_track_consecutive_and_total():
+    # consecutive_pass / total_pass must increment on success and reset on failure
+    cfg = _cfg()
+    s = _blank_stream()
+    # 2 fails -> pass counters stay 0
+    apply_result(s, ok=False, suspected_expired=False, cfg=cfg)
+    apply_result(s, ok=False, suspected_expired=False, cfg=cfg)
+    assert s.consecutive_pass == 0 and s.total_pass == 0
+    # 3 successes -> both counters rise, consecutive_failures stays 0
+    for _ in range(3):
+        apply_result(s, ok=True, suspected_expired=False, cfg=cfg)
+    assert s.total_pass == 3 and s.consecutive_pass == 3
+    assert s.consecutive_failures == 0
+    # a failure resets consecutive_pass but total_pass keeps accumulating
+    apply_result(s, ok=False, suspected_expired=False, cfg=cfg)
+    assert s.consecutive_pass == 0 and s.total_pass == 3
+    # success again -> consecutive_pass climbs, total_pass = 4
+    apply_result(s, ok=True, suspected_expired=False, cfg=cfg)
+    assert s.consecutive_pass == 1 and s.total_pass == 4
+
+
 if __name__ == "__main__":
     import traceback, tempfile
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

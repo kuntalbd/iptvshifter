@@ -37,6 +37,8 @@ def apply_result(stream, ok: bool, suspected_expired: bool, cfg, run_id="",
             stream.blacklisted_at = None
             stream.blacklist_reason = ""
         stream.consecutive_failures = 0
+        stream.consecutive_pass += 1
+        stream.total_pass += 1
         stream.total_successes += 1
         stream.last_working = _now_iso()
         stream.is_working = True
@@ -46,6 +48,7 @@ def apply_result(stream, ok: bool, suspected_expired: bool, cfg, run_id="",
     stream.is_working = False
     stream.consecutive_failures += 1
     stream.total_failures += 1
+    stream.consecutive_pass = 0
     stream.last_checked = _now_iso()
 
     # escalation: short + inactive long enough -> permanent

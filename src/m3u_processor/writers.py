@@ -161,3 +161,50 @@ def write_streams(streams, base_path: str, formats=("vlc", "kodi", "tivimate"),
                 f.write("\n".join(healthy_lines) + "\n")
             results[fmt + "_healthy"] = hpath
     return results
+
+
+def write_favorites(rows, out_dir: str, formats=("vlc", "kodi", "tivimate")):
+    """Write favorite.*.m3u for enabled favorites. SECURITY: always uses the
+    tokenless `original_url` (or `url`) so a tokened playable URL is never
+    published to the (possibly public) repo.
+
+    `rows` is a list of sqlite3.Row / dict-likes with keys:
+        name, original_url, url, groups (comma-joined group names or None).
+    Returns dict fmt -> output_path.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    entries = []
+    for r in rows:
+        name = r["name"] or r["url"] or ""
+        group = (r["groups"] or "").split(",")[0].strip() or ""
+        play_url = r["url"] or r["original_url"] or ""  # tokenless published URL only
+        if not play_url:
+            continue
+        entries.append((name, play_url, group))
+
+    results = {}
+    for fmt in formats:
+        if fmt == "vlc":
+            path = os.path.join(out_dir, "favorite.m3u")
+            lines = ["#EXTM3U"]
+            for name, url, _ in entries:
+                lines.append(f"#EXTINF:-1,{name}")
+                lines.append(url)
+        elif fmt == "kodi":
+            path = os.path.join(out_dir, "favorite.kodi.m3u")
+            lines = ["#EXTM3U"]
+            for name, url, _ in entries:
+                lines.append(f'#EXTINF:-1 tvg-name="{name}",{name}')
+                lines.append(url)
+        elif fmt == "tivimate":
+            path = os.path.join(out_dir, "favorite.tivimate.m3u")
+            lines = ["#EXTM3U"]
+            for name, url, g in entries:
+                lines.append(f'#EXTINF:-1 group-title="{g}",{name}')
+                lines.append(url + (f"|group-title={g}" if g else ""))
+        else:
+            continue
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        results[fmt] = path
+    return results

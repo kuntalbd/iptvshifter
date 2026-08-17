@@ -9,6 +9,7 @@ import sqlite3
 import os
 import gzip
 import shutil
+import json
 from datetime import datetime, timezone
 
 SCHEMA_VERSION = 1
@@ -40,6 +41,8 @@ CREATE TABLE IF NOT EXISTS streams (
     last_working DATETIME,
     consecutive_failures INTEGER DEFAULT 0,
     total_failures INTEGER DEFAULT 0,
+    consecutive_pass INTEGER DEFAULT 0,
+    total_pass INTEGER DEFAULT 0,
     total_successes INTEGER DEFAULT 0,
     blacklist_tier TEXT DEFAULT 'none',
     blacklisted_at DATETIME,
@@ -111,15 +114,20 @@ CREATE TABLE IF NOT EXISTS favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT DEFAULT '',
     url TEXT NOT NULL,
-    origin_url TEXT DEFAULT '',
+    original_url TEXT DEFAULT '',
     group_title TEXT DEFAULT '',
-    token_refresh_enabled BOOLEAN DEFAULT 0,
-    token_expires_at DATETIME,
-    is_enabled BOOLEAN DEFAULT 1,
+    source_path TEXT,                -- source file/URL for token re-extract (like streams)
+    is_url BOOLEAN DEFAULT 0,        -- 1 if source_path is a remote URL
+    extinf_raw TEXT,
+    attributes JSON,
+    is_enabled BOOLEAN DEFAULT 1,    -- item on/off -> excluded from final export when 0
     is_working BOOLEAN DEFAULT NULL,
+    is_working_checked DATETIME,
     last_working DATETIME,
     consecutive_failures INTEGER DEFAULT 0,
     total_failures INTEGER DEFAULT 0,
+    consecutive_pass INTEGER DEFAULT 0,
+    total_pass INTEGER DEFAULT 0,
     total_successes INTEGER DEFAULT 0,
     last_checked DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -226,6 +234,8 @@ class Database:
         for col, ctype in (
             ("health_score", "REAL DEFAULT NULL"),
             ("health_tier", "TEXT DEFAULT NULL"),
+            ("consecutive_pass", "INTEGER DEFAULT 0"),
+            ("total_pass", "INTEGER DEFAULT 0"),
         ):
             if col not in cols:
                 self.writer.execute(f"ALTER TABLE streams ADD COLUMN {col} {ctype}")
@@ -245,6 +255,30 @@ class Database:
             self.writer.execute(
                 "UPDATE streams SET is_url = 1 WHERE source IS NOT NULL "
                 "AND source_type = 'remote'")
+        # Migration: favorites schema alignment (drop deprecated cols, add new).
+        # - rename origin_url -> original_url if needed
+        # - drop token_refresh_enabled, token_expires_at
+        # - add source_path, is_url, extinf_raw, attributes, consecutive_pass,
+        #   total_pass, is_working_checked
+        fcols = {r[1] for r in self.writer.execute("PRAGMA table_info(favorites)")}
+        if "origin_url" in fcols and "original_url" not in fcols:
+            self.writer.execute("ALTER TABLE favorites RENAME COLUMN origin_url TO original_url")
+            fcols = {r[1] for r in self.writer.execute("PRAGMA table_info(favorites)")}
+        for dcol in ("token_refresh_enabled", "token_expires_at"):
+            if dcol in fcols:
+                self.writer.execute(f"ALTER TABLE favorites DROP COLUMN {dcol}")
+        fav_add = {
+            "source_path": "TEXT",
+            "is_url": "BOOLEAN DEFAULT 0",
+            "extinf_raw": "TEXT",
+            "attributes": "JSON",
+            "consecutive_pass": "INTEGER DEFAULT 0",
+            "total_pass": "INTEGER DEFAULT 0",
+            "is_working_checked": "DATETIME",
+        }
+        for col, ctype in fav_add.items():
+            if col not in fcols:
+                self.writer.execute(f"ALTER TABLE favorites ADD COLUMN {col} {ctype}")
         if version != SCHEMA_VERSION:
             self.writer.execute(
                 "INSERT OR REPLACE INTO config(key, value) VALUES('schema_version', ?)",
@@ -282,32 +316,60 @@ class Database:
         return self.writer.execute(sql, params).fetchall()
 
     # --- favorites subsystem (separate from main streams pipeline) ---
-    def favorite_add(self, name, url, origin_url="", group_title="",
-                     token_refresh_enabled=False):
+    def favorite_add(self, name, url, original_url="", group_title="",
+                     source_path="", is_url=0, extinf_raw="", attributes=None,
+                     is_enabled=1):
+        """Add a manual favorite. `source_path`/`is_url` are optional: if a
+        source is given AND the url carries a token query string, refresh mode
+        can re-extract a fresh token from that source."""
         c = self.writer
         cur = c.execute(
-            "INSERT INTO favorites(name, url, origin_url, group_title, "
-            "token_refresh_enabled) VALUES(?,?,?,?,?)",
-            (name or "", url, origin_url or "", group_title or "",
-             1 if token_refresh_enabled else 0),
+            "INSERT INTO favorites(name, url, original_url, group_title, "
+            "source_path, is_url, extinf_raw, attributes, is_enabled) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (name or "", url, original_url or "", group_title or "",
+             source_path or "", 1 if is_url else 0, extinf_raw or "",
+             json.dumps(attributes or {}), 1 if is_enabled else 0),
         )
         fid = cur.lastrowid
         self.writer.commit()
         return fid
 
     def favorite_add_existing(self, stream_url, name="", group_title="",
-                              token_refresh_enabled=False):
-        """Add a favorite from an existing streams.url (carries its origin)."""
+                             source_path=None, is_url=None):
+        """Add a favorite from an existing streams row, copying its tokened
+        origin + source (so refresh can re-extract the token later)."""
         row = self.writer.execute(
-            "SELECT url, original_url FROM streams WHERE url=? OR original_url=?",
+            "SELECT url, original_url, source_path, is_url, extinf_raw, attributes "
+            "FROM streams WHERE url=? OR original_url=?",
             (stream_url, stream_url),
         ).fetchone()
         if not row:
             return None
-        url = row["original_url"] or row["url"]
-        return self.favorite_add(name or "", url, origin_url="",
-                                 group_title=group_title,
-                                 token_refresh_enabled=token_refresh_enabled)
+        # Mirror streams storage: `url` is the tokenless normalized key (used as
+        # the refresh join key and published tokenless), `original_url` is the
+        # tokened playable working copy. Copying them as-is keeps refresh joins
+        # correct and prevents token leakage into the public favorite.m3u.
+        url = row["url"]
+        orig = row["original_url"] or ""
+        # inherit source unless caller overrides
+        sp = source_path if source_path is not None else (row["source_path"] or "")
+        iu = is_url if is_url is not None else (row["is_url"] or 0)
+        try:
+            attrs = json.loads(row["attributes"] or "{}")
+        except Exception:
+            attrs = {}
+        return self.favorite_add(
+            name=name or "",
+            url=url,
+            original_url=orig,
+            group_title=group_title or "",
+            source_path=sp,
+            is_url=iu,
+            extinf_raw=row["extinf_raw"] or "",
+            attributes=attrs,
+            is_enabled=1,
+        )
 
     def favorite_list(self, group="", working="", q=""):
         sql = ("SELECT f.*, GROUP_CONCAT(g.name) AS groups "
@@ -346,19 +408,42 @@ class Database:
         self.writer.execute("DELETE FROM favorites WHERE id=?", (fid,))
         self.writer.commit()
 
+    def favorite_edit(self, fid, name=None, group_title=None, source_path=None,
+                      is_url=None, is_enabled=None):
+        """Edit mutable fields of a favorite. None values are left unchanged."""
+        sets, params = [], []
+        if name is not None:
+            sets.append("name=?"); params.append(name or "")
+        if group_title is not None:
+            sets.append("group_title=?"); params.append(group_title or "")
+        if source_path is not None:
+            sets.append("source_path=?"); params.append(source_path or "")
+        if is_url is not None:
+            sets.append("is_url=?"); params.append(1 if is_url else 0)
+        if is_enabled is not None:
+            sets.append("is_enabled=?"); params.append(1 if is_enabled else 0)
+        if not sets:
+            return
+        sets.append("updated_at=CURRENT_TIMESTAMP")
+        params.append(fid)
+        self.writer.execute(
+            f"UPDATE favorites SET {', '.join(sets)} WHERE id=?", params)
+        self.writer.commit()
+
     def favorite_record_result(self, fid, ok: bool):
         c = self.writer
         if ok:
             c.execute(
                 "UPDATE favorites SET is_working=1, last_working=CURRENT_TIMESTAMP, "
                 "last_checked=CURRENT_TIMESTAMP, total_successes=total_successes+1, "
+                "consecutive_pass=consecutive_pass+1, total_pass=total_pass+1, "
                 "consecutive_failures=0, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (fid,))
         else:
             c.execute(
                 "UPDATE favorites SET is_working=0, last_checked=CURRENT_TIMESTAMP, "
                 "total_failures=total_failures+1, consecutive_failures=consecutive_failures+1, "
-                "updated_at=CURRENT_TIMESTAMP WHERE id=?", (fid,))
+                "consecutive_pass=0, updated_at=CURRENT_TIMESTAMP WHERE id=?", (fid,))
         c.commit()
 
     def favorite_groups(self):
