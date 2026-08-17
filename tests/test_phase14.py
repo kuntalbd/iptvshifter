@@ -175,18 +175,18 @@ def test_refresh_mode_part_b_refreshes_favorites_and_exports(tmp_path):
     row = db.query("SELECT original_url FROM favorites WHERE id=1")[0]
     assert "token=NEW" in row["original_url"], row["original_url"]
     assert os.path.exists(os.path.join(outd, "favorite.m3u"))
-    # SECURITY: published favorite.m3u must be TOKENLESS (url key), never the
-    # tokened original_url — even though refresh populated original_url with a
-    # fresh token.
+    # POLICY (Option B / Decision 33): favorite.m3u publishes the tokened
+    # original_url, mirroring working.m3u, so favorites actually play. After
+    # refresh re-extracted a fresh token, that tokened url MUST appear.
     content = open(os.path.join(outd, "favorite.m3u")).read()
-    assert "token=NEW" not in content, "tokened url leaked into public favorite.m3u!"
-    assert "token=OLD" not in content, "tokened url leaked into public favorite.m3u!"
-    assert "http://x/a.m3u" in content
+    assert "token=NEW" in content, "refreshed tokened original_url not published in favorite.m3u!"
+    assert "http://x/a.m3u?token=NEW" in content
     db.close()
 
 
-def test_favorites_published_m3u_is_tokenless_even_when_original_url_tokened(tmp_path):
-    # Manual add with a tokened original_url must NOT publish that token.
+def test_favorites_published_m3u_carries_tokened_original_url(tmp_path):
+    # Manual add with a tokened original_url: it MUST be published (Option B),
+    # same as working.m3u — so the favorite remains playable.
     dbp = os.path.join(str(tmp_path), "m3u.db")
     outd = os.path.join(str(tmp_path), "out")
     cfgd = dict(cfg_mod.DEFAULTS)
@@ -203,8 +203,8 @@ def test_favorites_published_m3u_is_tokenless_even_when_original_url_tokened(tmp
     orch = Orchestrator(db, cfg)
     orch.run(mode="refresh")
     content = open(os.path.join(outd, "favorite.m3u")).read()
-    assert "SECRET" not in content, "tokened original_url leaked into public m3u!"
-    assert "http://x/a.m3u" in content
+    assert "SECRET" in content, "tokened original_url should be published (Option B)!"
+    assert "http://x/a.m3u?token=SECRET" in content
     db.close()
 
 

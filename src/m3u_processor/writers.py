@@ -164,20 +164,25 @@ def write_streams(streams, base_path: str, formats=("vlc", "kodi", "tivimate"),
 
 
 def write_favorites(rows, out_dir: str, formats=("vlc", "kodi", "tivimate")):
-    """Write favorite.*.m3u for enabled favorites. SECURITY: always uses the
-    tokenless `original_url` (or `url`) so a tokened playable URL is never
-    published to the (possibly public) repo.
+    """Write favorite.*.m3u for enabled favorites.
 
-    `rows` is a list of sqlite3.Row / dict-likes with keys:
-        name, original_url, url, groups (comma-joined group names or None).
-    Returns dict fmt -> output_path.
+    MIRRORS write_streams: publishes the tokened `original_url` (the playable
+    working copy) so favorite channels actually play in the client. Falls back
+    to `url` (tokenless) only when `original_url` is empty.
+
+    NOTE: this intentionally publishes a token (same policy as working.m3u,
+    Decision 33). For a public repo this means the token is exposed — that is
+    accepted/intended so favorites remain playable. If a tokenless export is
+    ever needed, that is a separate concern, not this writer.
     """
     os.makedirs(out_dir, exist_ok=True)
     entries = []
     for r in rows:
         name = r["name"] or r["url"] or ""
         group = (r["groups"] or "").split(",")[0].strip() or ""
-        play_url = r["url"] or r["original_url"] or ""  # tokenless published URL only
+        # Publish the tokened playable `original_url` (mirrors write_streams);
+        # fall back to tokenless `url` only when original_url is empty.
+        play_url = r["original_url"] or r["url"] or ""
         if not play_url:
             continue
         entries.append((name, play_url, group))

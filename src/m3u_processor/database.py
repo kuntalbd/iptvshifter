@@ -347,9 +347,9 @@ class Database:
         if not row:
             return None
         # Mirror streams storage: `url` is the tokenless normalized key (used as
-        # the refresh join key and published tokenless), `original_url` is the
-        # tokened playable working copy. Copying them as-is keeps refresh joins
-        # correct and prevents token leakage into the public favorite.m3u.
+        # the refresh join key), `original_url` is the tokened playable working
+        # copy. Copying them as-is keeps refresh joins correct. Like streams, the
+        # tokened `original_url` is published (Decision 33) so favorites play.
         url = row["url"]
         orig = row["original_url"] or ""
         # inherit source unless caller overrides

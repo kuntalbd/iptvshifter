@@ -561,8 +561,13 @@ class Orchestrator:
         return refreshed
 
     def _export_favorites_to_out(self):
-        """Refresh-mode Part B(2): write favorite.*.m3u (tokenless url key)
-        for enabled favorites into output dir, then let publish push it."""
+        """Refresh-mode Part B(2): write favorite.*.m3u (tokened original_url)
+        for enabled favorites into output dir, then let publish push it.
+
+        Mirrors write_streams: publishes the tokened `original_url` so favorites
+        stay playable (same token-exposure policy as working.m3u, Decision 33).
+        `url` is the tokenless fallback key only.
+        """
         from .writers import write_favorites
         out = self.config.get("output.dir", "./out")
         rows = self.db.query(
@@ -571,9 +576,8 @@ class Orchestrator:
             " JOIN favorite_groups g ON g.id=m.group_id WHERE m.favorite_id=favorites.id) AS groups "
             "FROM favorites WHERE is_enabled=1"
         )
-        # SECURITY: publish the tokenless `url` key — never `original_url`
-        # (which may carry a live token, e.g. after refresh re-extraction or a
-        # manual tokened add). `original_url` is only for internal validate/refresh.
+        # Publish the tokened `original_url` (mirrors write_streams / Decision 33)
+        # so favorite channels actually play. `url` is the tokenless fallback.
         results = write_favorites(
             rows, out,
             formats=self.config.get("output.formats", ["vlc", "kodi", "tivimate"]),
