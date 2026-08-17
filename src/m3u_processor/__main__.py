@@ -146,17 +146,22 @@ def main(argv=None):
         db = _db(args, cfg)
         db.init_db(backup=False)
         orch = Orchestrator(db, cfg)
-        # ingest configured sources
-        feed_file = cfg.get("sources.feed_file")
-        if feed_file and Path(feed_file).is_file():
-            for line in open(feed_file):
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    orch.ingest_feed(line)
-        pdir = cfg.get("sources.playlist_dir")
-        if pdir and Path(pdir).is_dir():
-            for f in sorted(Path(pdir).glob("*.m3u*")):
-                orch.ingest_source(str(f))
+        # Refresh mode only re-extracts tokens from EXISTING db rows — it must
+        # NOT re-ingest feeds (that would re-parse everything and is the source
+        # of rate-limit/429 crashes). Skip ingest entirely for refresh.
+        run_mode = getattr(args, "mode", None)
+        if run_mode != "refresh":
+            # ingest configured sources
+            feed_file = cfg.get("sources.feed_file")
+            if feed_file and Path(feed_file).is_file():
+                for line in open(feed_file):
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        orch.ingest_feed(line)
+            pdir = cfg.get("sources.playlist_dir")
+            if pdir and Path(pdir).is_dir():
+                for f in sorted(Path(pdir).glob("*.m3u*")):
+                    orch.ingest_source(str(f))
         # resolve mode: explicit --mode > --job's mode > config validation.mode
         mode = getattr(args, "mode", None)
         job_name = getattr(args, "job", None)

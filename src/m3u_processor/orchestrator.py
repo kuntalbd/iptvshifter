@@ -106,8 +106,29 @@ class Orchestrator:
     def ingest_feed(self, url):
         # fetch remote feed text, parse in-memory (no file needed)
         import requests
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
+        import time as _time
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = requests.get(url, timeout=30)
+                if resp.status_code == 429:
+                    # Rate-limited: back off and retry (transient).
+                    _time.sleep(5 * (attempt + 1))
+                    last_err = "429 Too Many Requests"
+                    continue
+                resp.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as e:
+                if getattr(e.response, "status_code", None) == 429 and attempt < 2:
+                    _time.sleep(5 * (attempt + 1))
+                    last_err = str(e)
+                    continue
+                raise
+        else:
+            # exhausted retries — record and skip so one bad feed can't abort run
+            self.db.log_error(self.run_id, "feed_ingest_failed",
+                             f"{last_err or 'failed'} (skipped after retries): {url}", url)
+            return None
         parser = PlaylistParser(
             aggregate_subdomains=bool(self.config.get("providers.aggregate_subdomains", True))
         )
