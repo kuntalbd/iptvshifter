@@ -134,18 +134,21 @@ categories:
     International: ["uk", "france", "french", "arabic", "turkey", "turkish", "germany", "russia", "world", "europe", "canada", "spanish", "italy", "japan", "thai"]
 
 # === Auto-publish finished outputs to the public git repo ===
-# After EVERY run (any mode), files in `output.dir` are copied into
-# `target_dir` (relative to this config file's dir -> repo-root out/) and
-# committed + pushed. Credentials + repo URL are read from the `.env` file
-# (GITHUB_USER / GITHUB_PAT / GITHUB_REPO_URL) — never hardcoded here.
-# The secret is supplied to git via a throwaway GIT_ASKPASS helper and never
-# logged. For Docker, mount your `.env` at /config/.env and set `auth_file`
-# (or rely on the env vars, which take precedence).
+# After a run, files in `output.dir` are copied into `target_dir` (relative to
+# this config file's dir -> repo-root out/) and committed + pushed. Credentials
+# + repo URL are read from the `.env` file (GITHUB_USER / GITHUB_PAT /
+# GITHUB_REPO_URL) — never hardcoded here. The secret is supplied to git via a
+# throwaway GIT_ASKPASS helper and never logged. For Docker, mount your `.env`
+# at /config/.env and set `auth_file` (or rely on the env vars, which win).
+#
+# NOTE: this EXAMPLE config ships publish DISABLED so the test-suite (which
+# loads it) never pushes to a real repo. Production deployments override this
+# in their own config (e.g. prod/config.yaml sets enabled: true).
 publish:
-  enabled: true
+  enabled: false
   target_dir: "../out"          # relative to this config file -> repo root out/
   git:
-    enabled: true
+    enabled: false
     remote: "origin"
     branch: "main"
     # auth_file is optional; env GITHUB_USER/GITHUB_PAT/GITHUB_REPO_URL win.
