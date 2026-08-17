@@ -35,6 +35,7 @@ backups/
 # playlist folder (copied from prod/out after a run fully completes). It is
 # tracked on purpose. Only the PRIVATE locations are ignored.
 out/.publish.lock
+out/.last_publish_hash
 prod/out/
 output/
 playlists/

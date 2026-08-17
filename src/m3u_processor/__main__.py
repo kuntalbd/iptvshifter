@@ -265,7 +265,7 @@ def main(argv=None):
 
     if args.command == "publish":
         from m3u_processor.publish import publish_outputs
-        res = publish_outputs(cfg, run_id=getattr(args, "run_id", "") or "manual")
+        res = publish_outputs(cfg, run_id=getattr(args, "run_id", "") or "manual", source="cli:publish")
         print(json.dumps(res, indent=2))
         return 0 if res.get("published") else 1
 

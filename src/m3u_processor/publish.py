@@ -1,8 +1,11 @@
 """Publish validated playlists to the public git repo (out/ folder).
 
-After EVERY run (any mode), the finished outputs in the local working
+After a run (any mode), the finished outputs in the local working
 ``output.dir`` (e.g. ``prod/out/``) are copied into the repo-root ``out/``
-folder and committed + pushed to GitHub automatically. The git credential is
+folder and committed + pushed to GitHub automatically. Publishing is
+best-effort and CONTENT-GATED: if the copied output is byte-identical to the
+last published snapshot (tracked via ``out/.last_publish_hash``), the commit is
+skipped so repeated/overlapping runs do not spam commits. The git credential is
 read from ``publish.git.auth_file`` (a 2-line file: line1=username,
 line2=PAT) and supplied to git via a throwaway GIT_ASKPASS helper so the
 secret is never printed or logged.
@@ -71,6 +74,22 @@ def _resolve(config, dotted: str, default: str) -> str:
     return os.path.normpath(os.path.join(base, val))
 
 
+def _snapshot_hash(out_dir: str) -> str:
+    """Stable hash of all files in out_dir (name+sorted) for change detection."""
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        for entry in sorted(os.scandir(out_dir), key=lambda e: e.name):
+            if entry.is_file() and not entry.name.startswith("."):
+                h.update(entry.name.encode())
+                with open(entry.path, "rb") as _f:
+                    for _chunk in iter(lambda: _f.read(65536), b""):
+                        h.update(_chunk)
+    except Exception:
+        pass
+    return h.hexdigest()
+
+
 def _copy_outputs(src_dir: str, dst_dir: str) -> list:
     """Copy every file in src_dir into dst_dir (overwrite). Returns copied names."""
     copied = []
@@ -132,18 +151,27 @@ def _git(args, cwd, auth_file, timeout=120):
             os.remove(askpass)
 
 
-def publish_outputs(config, run_id: str = "", mode: str = "") -> dict:
+def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") -> dict:
     """Copy working outputs to the repo out/ folder and push to git.
 
     `mode` gates publishing: by default refresh runs do NOT publish (they only
     refresh tokens; publishing their partial output would clobber the full
     playlist on GitHub). Pass mode='refresh' to force-skip.
 
+    `source` is an AUDIT tag recording WHAT triggered this publish
+    (e.g. "orchestrator", "cli:publish", "web:run") so commit storms can be
+    traced. There is no other audit trail, so this is the only record.
+
+    A content-hash guard skips the commit entirely when the published output
+    is byte-identical to the last published snapshot, preventing commit storms
+    from repeated/overlapping runs that re-publish unchanged playlists.
+
     A file lock serializes regeneration across concurrent runs so a short run
     finishing mid-way through a long full run cannot clobber out/ simultaneously.
 
     Returns a status dict. Best-effort: errors are captured, never raised.
     """
+    import hashlib
     result = {
         "published": False, "copied": [], "commit": None,
         "push": None, "error": None, "skipped": None,
@@ -153,9 +181,6 @@ def publish_outputs(config, run_id: str = "", mode: str = "") -> dict:
         result["skipped"] = "publish disabled in config"
         return result
 
-    # refresh runs publish too (they regenerate the FULL output from the whole DB,
-    # so pushing is safe — it is not a partial playlist).
-    # 1) resolve source (local working output) and destination (repo out/)
     src = _resolve(config, "output.dir", "./out")
     target_rel = pub.get("target_dir", "../out")
     if os.path.isabs(target_rel):
@@ -184,9 +209,41 @@ def publish_outputs(config, run_id: str = "", mode: str = "") -> dict:
             result["error"] = f"copy failed: {e}"
             return result
 
+        # 2b) AUDIT + content-hash guard.
+        # Compute a stable hash of the copied playlist files so we can skip a
+        # commit when the published content is unchanged. This stops commit
+        # storms from overlapping/repeated runs that re-publish the same bytes.
+        # The hash is persisted to a STATE file kept in the PRIVATE working dir
+        # (src, not the public repo out/) so it never gets published, and also
+        # listed in .gitignore as defense-in-depth.
+        content_hash = _snapshot_hash(dst)
+        state_file = os.path.join(src, ".last_publish_hash")
+        prev_hash = ""
+        try:
+            with open(state_file) as _f:
+                prev_hash = _f.read().strip()
+        except Exception:
+            prev_hash = ""
+        src_tag = source or "unknown"
+        print(f"[publish] run_id={run_id!r} mode={mode!r} source={src_tag!r} "
+              f"files={result['copied']} hash={content_hash[:12]} "
+              f"changed={content_hash != prev_hash}", flush=True)
+        if content_hash == prev_hash and prev_hash:
+            # Nothing actually changed since last publish -> skip the commit.
+            result["published"] = True
+            result["skipped"] = "no content change since last publish"
+            return result
+
         # 3) git commit + push
         g = pub.get("git") or {}
         if not g.get("enabled", True):
+            # copied, no push requested — still record the published hash so a
+            # later run can skip a no-op re-publish. Keep it in the PRIVATE src.
+            try:
+                with open(os.path.join(src, ".last_publish_hash"), "w") as _f:
+                    _f.write(content_hash)
+            except Exception:
+                pass
             result["published"] = True  # copied, no push requested
             result["skipped"] = "git push disabled"
             return result
@@ -233,6 +290,17 @@ def publish_outputs(config, run_id: str = "", mode: str = "") -> dict:
         if not os.path.isdir(os.path.join(repo_root, ".git")):
             result["error"] = f"not a git repo: {repo_root}"
             return result
+
+        # Persist the published content hash BEFORE committing, while the lock
+        # is still held. This is critical for the commit-storm guard: a
+        # concurrent/overlapping run that acquires the lock next will read this
+        # hash and skip its (identical) commit instead of publishing a duplicate.
+        # Stored in the PRIVATE src dir (never published).
+        try:
+            with open(os.path.join(src, ".last_publish_hash"), "w") as _f:
+                _f.write(content_hash)
+        except Exception:
+            pass
 
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         msg = f"auto-publish playlists ({run_id or 'run'}) {ts}"

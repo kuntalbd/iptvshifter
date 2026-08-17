@@ -58,6 +58,44 @@ def test_publish_disabled_skips():
     assert res.get("skipped") == "publish disabled in config", res
 
 
+def test_publish_skips_unchanged_content(capsys):
+    # Repeated publish of identical output must NOT create a second commit
+    # (commit-storm guard). The content hash is persisted and reused.
+    tmp = tempfile.mkdtemp()
+    cfg = _build_cfg(tmp)
+    out = cfg.get("output.dir")
+    os.makedirs(out)
+    with open(os.path.join(out, "working.m3u"), "w") as f:
+        f.write("#EXTM3U\nhttp://x/y.m3u8\n")
+    r1 = publish_mod.publish_outputs(cfg, run_id="t1", source="test")
+    assert r1["published"] is True
+    # second publish, identical content -> skipped (no content change)
+    r2 = publish_mod.publish_outputs(cfg, run_id="t2", source="test")
+    assert r2["published"] is True
+    assert "no content change" in (r2.get("skipped") or ""), r2
+    # audit log line present
+    out_log = capsys.readouterr().out
+    assert "[publish] run_id='t1'" in out_log, out_log
+    assert "source='test'" in out_log, out_log
+
+
+def test_publish_publishes_when_content_changes(capsys):
+    tmp = tempfile.mkdtemp()
+    cfg = _build_cfg(tmp)
+    out = cfg.get("output.dir")
+    os.makedirs(out)
+    with open(os.path.join(out, "working.m3u"), "w") as f:
+        f.write("#EXTM3U\nA\n")
+    r1 = publish_mod.publish_outputs(cfg, run_id="t1", source="test")
+    assert r1["published"] is True
+    # change content -> must publish (not skipped by hash guard)
+    with open(os.path.join(out, "working.m3u"), "w") as f:
+        f.write("#EXTM3U\nB\n")
+    r2 = publish_mod.publish_outputs(cfg, run_id="t2", source="test")
+    assert r2["published"] is True
+    assert "no content change" not in (r2.get("skipped") or ""), r2
+
+
 def test_publish_refresh_mode_publishes():
     # Refresh runs regenerate the FULL output from the whole DB, so publishing is
     # safe (not a partial playlist). A refresh run should publish like any other.

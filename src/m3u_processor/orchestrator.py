@@ -653,7 +653,7 @@ class Orchestrator:
         # validation run or its report.
         try:
             from . import publish as _publish
-            pub_result = _publish.publish_outputs(self.config, run_id=self.run_id, mode=getattr(self, "mode", ""))
+            pub_result = _publish.publish_outputs(self.config, run_id=self.run_id, mode=getattr(self, "mode", ""), source="orchestrator")
             if not pub_result.get("published") and pub_result.get("error"):
                 # surface as a warning in stats for operator visibility
                 self.stats["publish_error"] = pub_result["error"]
