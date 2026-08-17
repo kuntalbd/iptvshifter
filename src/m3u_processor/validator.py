@@ -11,6 +11,16 @@ from __future__ import annotations
 import time
 import socket
 import threading
+import faulthandler  # SEGV/native crashes dump a C-level trace instead of silent death
+
+# Enable faulthandler so any native crash in the TLS/DNS stack (which Python
+# try/except cannot catch) leaves a Stack trace in the journal instead of a
+# bare "code=dumped, signal=SEGV". This is what lets us diagnose the
+# 2026-08-17 quick-run SEGV rather than guess.
+try:
+    faulthandler.enable()
+except Exception:
+    pass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
@@ -120,7 +130,7 @@ class StreamValidator:
         # overwhelms the resolver and hangs threads in getaddrinfo (no timeout
         # there) -> deadlock. The semaphore bounds real concurrency to a safe
         # level; extra worker threads simply queue for a slot.
-        self.max_concurrent = int(config.get("validation.max_concurrent", 40))
+        self.max_concurrent = int(config.get("validation.max_concurrent", 24))
         # Hard wall-clock cap per link. The (connect,read) request timeout resets
         # on every successful byte, so a server that trickles 1 byte / few-seconds
         # NEVER trips it and a handful of such links stall as_completed forever
@@ -158,8 +168,12 @@ class StreamValidator:
             import requests
             from requests.adapters import HTTPAdapter
             s = requests.Session()
-            s.mount("https://", HTTPAdapter(pool_connections=20, pool_maxsize=50))
-            s.mount("http://", HTTPAdapter(pool_connections=20, pool_maxsize=50))
+            # pool_maxsize must be >= max_concurrent so the connection pool is
+            # never exhausted (an exhausted pool makes worker threads block and
+            # pile up native TLS handles, a suspected SEGV contributor).
+            pool = max(int(self.max_concurrent), 24)
+            s.mount("https://", HTTPAdapter(pool_connections=pool, pool_maxsize=pool))
+            s.mount("http://", HTTPAdapter(pool_connections=pool, pool_maxsize=pool))
             self._thread_local.session = s
             local = s
         return local
