@@ -64,6 +64,16 @@ def _pid_alive(pid):
     return True
 
 
+def _const_time_eq(a: str, b: str) -> bool:
+    """Constant-time string equality (token comparison)."""
+    if len(a) != len(b):
+        return False
+    res = 0
+    for ca, cb in zip(a.encode("utf-8"), b.encode("utf-8")):
+        res |= ca ^ cb
+    return res == 0
+
+
 def _get_db(cfg):
     db = Database(cfg.get("database.path"))
     db.init_db(backup=False)
@@ -100,6 +110,45 @@ def create_app(cfg):
         return data
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # ---------- optional API auth ----------
+    # When `webui.auth_token_file` points at a file containing a non-empty
+    # token, every /api/* call must present it (Authorization: Bearer <token>,
+    # X-Auth-Token header, ?token= query, or m3u_token cookie). Constant-time
+    # comparison avoids timing side-channels. Read per request (the operator can
+    # rotate the token file without restarting the daemon).
+    _auth_token = None
+    _auth_token_mtime = None
+
+    @app.middleware("http")
+    async def _api_auth(request: Request, call_next):
+        nonlocal _auth_token, _auth_token_mtime
+        path = request.url.path
+        if not (path == "/api" or path.startswith("/api/")):
+            return await call_next(request)
+        tf = cfg.get("webui.auth_token_file", "")
+        if not tf:
+            return await call_next(request)
+        try:
+            st = os.stat(tf)
+            if _auth_token is None or st.st_mtime != _auth_token_mtime:
+                with open(tf, "r", encoding="utf-8") as fh:
+                    _auth_token = fh.read().strip()
+                _auth_token_mtime = st.st_mtime
+        except OSError:
+            _auth_token = None
+        expected = _auth_token or ""
+        if not expected:
+            return await call_next(request)
+        provided = request.headers.get("Authorization", "")
+        if provided.lower().startswith("bearer "):
+            provided = provided[len("bearer "):].strip()
+        elif not provided:
+            provided = request.headers.get("X-Auth-Token", "") or request.query_params.get("token", "") or request.cookies.get("m3u_token", "")
+        provided = provided.strip()
+        if not provided or not _const_time_eq(provided, expected):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return await call_next(request)
 
     # ---------- pages ----------
     @app.get("/", response_class=HTMLResponse)
@@ -397,6 +446,8 @@ def create_app(cfg):
             jobs.append({"name": name, "mode": mode, "cron": cron})
         _cfg_mod.save_config(cfg)
         _regenerate_units()
+        _LOG.info("scheduler add/update job=%s mode=%s cron=%s",
+                  name, mode, cron)
         return {"ok": True, "jobs": jobs}
 
     @app.delete("/api/scheduler")
@@ -409,6 +460,7 @@ def create_app(cfg):
         sched["jobs"] = [j for j in jobs if j.get("name") != name]
         _cfg_mod.save_config(cfg)
         _regenerate_units()
+        _LOG.info("scheduler delete job=%s", name)
         return {"ok": True, "jobs": sched["jobs"]}
 
     # ---------- api ----------
@@ -465,9 +517,39 @@ def create_app(cfg):
     def api_providers():
         db = _get_db(cfg)
         try:
-            rows = db.query(
-                "SELECT domain, enabled, disabled_reason, first_seen FROM providers ORDER BY domain"
-            )
+            rows = db.query("""
+                SELECT
+                    p.domain,
+                    p.enabled,
+                    p.disabled_reason,
+                    p.first_seen,
+                    COALESCE(s.total, 0) AS total_streams,
+                    COALESCE(s.working, 0) AS working,
+                    COALESCE(s.failed, 0) AS failed,
+                    COALESCE(s.unchecked, 0) AS unchecked,
+                    COALESCE(s.blacklist_short, 0) AS blacklist_short,
+                    COALESCE(s.blacklist_permanent, 0) AS blacklist_permanent,
+                    COALESCE(s.healthy, 0) AS healthy,
+                    COALESCE(s.medium, 0) AS medium,
+                    COALESCE(s.slow, 0) AS slow
+                FROM providers p
+                LEFT JOIN (
+                    SELECT
+                        provider_domain,
+                        COUNT(*) AS total,
+                        SUM(CASE WHEN is_working = 1 THEN 1 ELSE 0 END) AS working,
+                        SUM(CASE WHEN is_working = 0 THEN 1 ELSE 0 END) AS failed,
+                        SUM(CASE WHEN is_working IS NULL THEN 1 ELSE 0 END) AS unchecked,
+                        SUM(CASE WHEN blacklist_tier = 'short' THEN 1 ELSE 0 END) AS blacklist_short,
+                        SUM(CASE WHEN blacklist_tier = 'permanent' THEN 1 ELSE 0 END) AS blacklist_permanent,
+                        SUM(CASE WHEN health_tier = 'healthy' THEN 1 ELSE 0 END) AS healthy,
+                        SUM(CASE WHEN health_tier = 'medium' THEN 1 ELSE 0 END) AS medium,
+                        SUM(CASE WHEN health_tier = 'slow' THEN 1 ELSE 0 END) AS slow
+                    FROM streams
+                    GROUP BY provider_domain
+                ) s ON s.provider_domain = p.domain
+                ORDER BY total_streams DESC, p.domain
+            """)
         finally:
             db.close()
         return [dict(r) for r in rows]
@@ -479,6 +561,8 @@ def create_app(cfg):
         try:
             set_provider_enabled(db, body["domain"], False,
                                  reason=body.get("reason", "manual"), by="web")
+            _LOG.info("web provider disabled domain=%s reason=%s",
+                      body["domain"], body.get("reason", "manual"))
         finally:
             db.close()
         return {"ok": True}
@@ -489,6 +573,7 @@ def create_app(cfg):
         db = _get_db(cfg)
         try:
             set_provider_enabled(db, body["domain"], True, by="web")
+            _LOG.info("web provider enabled domain=%s", body["domain"])
         finally:
             db.close()
         return {"ok": True}
@@ -636,6 +721,7 @@ def create_app(cfg):
             )
             if body.get("group"):
                 db.favorite_set_group([fid], body["group"])
+            _LOG.info("web favorite added id=%s name=%s", fid, body.get("name", ""))
             return {"ok": True, "id": fid}
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -654,6 +740,7 @@ def create_app(cfg):
             )
             if fid and body.get("group"):
                 db.favorite_set_group([fid], body["group"])
+            _LOG.info("web favorite add-existing id=%s name=%s", fid, body.get("name", ""))
             return {"ok": True, "id": fid} if fid else {"ok": False, "error": "stream not found"}
         finally:
             db.close()
@@ -687,6 +774,7 @@ def create_app(cfg):
         db = _get_db(cfg)
         try:
             db.favorite_delete(body["id"])
+            _LOG.info("web favorite deleted id=%s", body["id"])
             return {"ok": True}
         finally:
             db.close()
@@ -697,6 +785,8 @@ def create_app(cfg):
         db = _get_db(cfg)
         try:
             db.favorite_set_enabled(body["id"], bool(body.get("enabled", True)))
+            _LOG.info("web favorite set-enabled id=%s enabled=%s",
+                      body["id"], body.get("enabled", True))
             return {"ok": True}
         finally:
             db.close()
@@ -711,6 +801,7 @@ def create_app(cfg):
         db = _get_db(cfg)
         try:
             db.favorite_set_group(fids, group)
+            _LOG.info("web favorite set-group count=%d group=%s", len(fids), group)
             return {"ok": True}
         finally:
             db.close()
@@ -778,6 +869,7 @@ def create_app(cfg):
                 categories_cfg=cfg.get("categories"),
                 quality_cfg=cfg.get("quality"),
             )
+            _LOG.info("web generate files=%s", list(results.keys()))
         finally:
             db.close()
         return {"ok": True, "files": results}

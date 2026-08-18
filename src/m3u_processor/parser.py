@@ -25,9 +25,37 @@ from .utils import (
     split_pipe_url,
     ROTATING_TOKEN_PARAMS,
 )
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.parser")
 
 # Regex: #EXTINF:-1 [attrs] ,name
-EXTINF_RE = re.compile(r"^#EXTINF:(-?\d+(?:\.\d+)?)\s*(.*?),(.*)$")
+# NOTE: the attribute block may contain commas inside quoted values (e.g.
+# group-title="General,1+1"), so we use a helper to split correctly.
+EXTINF_RE = re.compile(r"^#EXTINF:(-?\d+(?:\.\d+)?)\s*(.*)$")
+
+
+def _split_extinf_attrs_and_name(rest: str) -> tuple[str, str]:
+    """Split the attrs portion from the channel name in an EXTINF line.
+
+    The comma that separates attributes from name must NOT be inside a quoted
+    value.  Walk left-to-right tracking quote state; the first unquoted comma
+    is the delimiter.
+    """
+    in_quote = False
+    quote_char = ""
+    for i, ch in enumerate(rest):
+        if in_quote:
+            if ch == quote_char:
+                in_quote = False
+        else:
+            if ch in ('"', "'"):
+                in_quote = True
+                quote_char = ch
+            elif ch == ",":
+                return rest[:i].rstrip(), rest[i + 1:].lstrip()
+    # No comma found — entire string is the name (no attrs)
+    return "", rest.strip()
 # attribute key="value" or key=value
 ATTR_RE = re.compile(r'(\w[\w-]*)=("([^"]*)"|(\S*))')
 VLOPT_RE = re.compile(r"^#EXTVLCOPT:\s*(.+?)=(.*)$")
@@ -105,6 +133,7 @@ class PlaylistParser:
         pending_kodi = {}
         pending_grp = None
         pending_extinf = None  # (attrs_dict, name)
+        pending_extinf_raw = ""  # raw #EXTINF: line for extinf_raw column
         pending_epg = None
 
         for raw in lines:
@@ -117,9 +146,10 @@ class PlaylistParser:
             if stripped.startswith("#EXTINF:"):
                 m = EXTINF_RE.match(stripped)
                 if m:
-                    attrs = _parse_attrs(m.group(2))
-                    name = m.group(3).strip()
+                    attrs_str, name = _split_extinf_attrs_and_name(m.group(2))
+                    attrs = _parse_attrs(attrs_str)
                     pending_extinf = (attrs, name)
+                    pending_extinf_raw = stripped
                 continue
 
             if stripped.startswith("#EXTM3U"):
@@ -207,7 +237,7 @@ class PlaylistParser:
                 ),
                 source_type=source_type,
                 source_path=source_path,
-                extinf_raw=stripped if pending_extinf else "",
+                extinf_raw=pending_extinf_raw if pending_extinf else "",
                 attributes=attributes,
             )
             stream._scheme = scheme  # transient, not persisted
@@ -221,6 +251,7 @@ class PlaylistParser:
             pending_kodi = {}
             pending_grp = None
             pending_extinf = None
+            pending_extinf_raw = ""
 
     def parse_text(self, text, **kw):
         return list(self.parse_lines(text.splitlines(), **kw))
@@ -333,4 +364,5 @@ def merge_into_db(db, streams, run_id="", allow_multi_token=True):
         else:
             stats["duplicates"] += 1
     db.commit()
+    _LOG.debug("merge_into_db run_id=%s stats=%s", run_id, stats)
     return stats

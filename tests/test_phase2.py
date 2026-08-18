@@ -27,6 +27,52 @@ def test_extinf_name_first_comma_only():
     assert s.attributes["group-title"] == "News"
 
 
+def test_extinf_comma_inside_quoted_group_title():
+    # F30: group-title contains comma — must NOT split inside quotes
+    text = '#EXTINF:-1 group-title="General,1+1 International",1+1 International\nhttp://e/x.m3u8\n'
+    s = PlaylistParser().parse_text(text)[0]
+    assert s.name == "1+1 International", f"got {s.name!r}"
+    assert s.attributes["group-title"] == "General,1+1 International"
+
+
+def test_extinf_multiple_quoted_commas():
+    # group-title with multiple commas inside quotes
+    text = '#EXTINF:-1 group-title="A,B,C",Channel\nhttp://e/x.m3u8\n'
+    s = PlaylistParser().parse_text(text)[0]
+    assert s.name == "Channel"
+    assert s.attributes["group-title"] == "A,B,C"
+
+
+def test_extinf_no_comma_entire_string_is_name():
+    # No comma at all — entire rest is the name
+    text = '#EXTINF:-1 Simple Channel\nhttp://e/x.m3u8\n'
+    s = PlaylistParser().parse_text(text)[0]
+    assert s.name == "Simple Channel"
+    assert s.attributes.get("group-title", "") == ""
+
+
+def test_extinf_extinf_raw_populated():
+    # pending_extinf_raw: extinf_raw should contain the actual #EXTINF line
+    text = '#EXTINF:-1 tvg-name="X" group-title="News",BBC\nhttp://e/x.m3u8\n'
+    s = PlaylistParser().parse_text(text)[0]
+    assert s.extinf_raw == '#EXTINF:-1 tvg-name="X" group-title="News",BBC'
+
+
+def test_extinf_raw_empty_for_orphan_url():
+    # No preceding EXTINF → extinf_raw should be empty
+    text = 'http://e/x.m3u8\n'
+    s = PlaylistParser().parse_text(text)[0]
+    assert s.extinf_raw == ""
+
+
+def test_extinf_raw_last_extinf_wins():
+    # Two EXTINF lines before one URL — last valid one's raw line should be stored
+    text = '#EXTINF:-1,Chan1\n#EXTINF:-1 tvg-name="Y",Chan2\nhttp://e/x.m3u8\n'
+    s = PlaylistParser().parse_text(text)[0]
+    assert s.name == "Chan2"
+    assert s.extinf_raw == '#EXTINF:-1 tvg-name="Y",Chan2'
+
+
 def test_extvlopt_parsed():
     # F1: #EXTVLCOPT captured
     text = '#EXTINF:-1,Chan\n#EXTVLCOPT:http-user-agent=UA1\n#EXTVLCOPT:http-referrer=R1\nhttp://e/x.m3u8\n'

@@ -77,6 +77,23 @@ def test_extract_domain():
     assert u.extract_domain("https://example.co.uk/x", True) == "example.co.uk"
 
 
+def test_extract_domain_ipv4():
+    assert u.extract_domain("http://158.101.222.193:88/stream") == "158.101.222.193"
+    assert u.extract_domain("http://10.0.0.1/path") == "10.0.0.1"
+    assert u.extract_domain("http://255.255.255.255:443/x") == "255.255.255.255"
+
+
+def test_extract_domain_ipv6():
+    assert u.extract_domain("http://[::1]:80/stream") == "[::1]"
+    assert u.extract_domain("http://[2001:db8::1]:8080/x.m3u8") == "[2001:db8::1]"
+    assert u.extract_domain("http://[fc00::1]/stream") == "[fc00::1]"
+
+
+def test_extract_domain_empty():
+    assert u.extract_domain("") == ""
+    assert u.extract_domain("not-a-url") == ""
+
+
 def test_header_merge_and_writers():
     h = u.merge_headers(
         {"http-user-agent": "UA1", "http-referrer": "R1"}, {"User-Agent": "UA2"}

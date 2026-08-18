@@ -141,7 +141,7 @@ is_enabled=1`. Per **ADR-008 (Option B)**, the published favorite URL uses the
 streams(
   id PK, url TEXT (tokenless key), original_url TEXT (tokened, playable),
   name, provider_domain, source_type, source_path, source, is_url,
-  attributes JSON, enabled, blacklist_tier, is_working NULL|0|1,
+  extinf_raw TEXT, attributes JSON, enabled, blacklist_tier, is_working NULL|0|1,
   last_checked, last_working, consecutive_failures, total_failures,
   total_pass, consecutive_pass, total_successes, health_score, health_tier,
   first_seen, updated_at

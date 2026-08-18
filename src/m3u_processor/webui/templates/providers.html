@@ -1,32 +1,154 @@
 {% extends "base.html" %}
 {% block title %}Providers{% endblock %}
 {% block content %}
+<style>
+  .provider-stats { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .provider-stats .chip { font-size:0.72rem; padding:2px 7px; border-radius:4px; white-space:nowrap; }
+  .chip-total { background:#334155; color:#cbd5e1; }
+  .chip-working { background:#14532d; color:#86efac; }
+  .chip-failed { background:#7f1d1d; color:#fca5a5; }
+  .chip-unchecked { background:#4a4458; color:#c4b5fd; }
+  .chip-bs { background:#78350f; color:#fcd34d; }
+  .chip-bp { background:#7f1d1d; color:#fca5a5; }
+  .chip-healthy { background:#064e3b; color:#6ee7b7; }
+  .chip-medium { background:#713f12; color:#fde68a; }
+  .chip-slow { background:#7f1d1d; color:#fca5a5; }
+  .state-enabled { color:#22c55e; font-weight:600; }
+  .state-disabled { color:#ef4444; font-weight:600; }
+  .action-btn { padding:4px 12px; border-radius:4px; border:none; cursor:pointer; font-size:0.8rem; }
+  .btn-disable { background:#dc2626; color:#fff; }
+  .btn-enable { background:#16a34a; color:#fff; }
+  .btn-disable:hover { background:#b91c1c; }
+  .btn-enable:hover { background:#15803d; }
+  .summary-bar { display:flex; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
+  .summary-item { font-size:0.85rem; color:#94a3b8; }
+  .summary-item strong { color:#e2e8f0; }
+</style>
+
 <h1>Providers</h1>
+<div class="summary-bar" id="summary"></div>
+
+<div style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+  <input id="providerSearch" placeholder="Search provider..." style="padding:6px 10px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0; min-width:200px;" oninput="loadProviders()">
+  <select id="filterState" style="padding:6px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0;" onchange="loadProviders()">
+    <option value="">All States</option>
+    <option value="enabled">Enabled Only</option>
+    <option value="disabled">Disabled Only</option>
+  </select>
+  <select id="sortBy" style="padding:6px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0;" onchange="loadProviders()">
+    <option value="streams-desc">Sort: Most Streams</option>
+    <option value="streams-asc">Sort: Fewest Streams</option>
+    <option value="working-desc">Sort: Most Working</option>
+    <option value="name-asc">Sort: Name A-Z</option>
+    <option value="name-desc">Sort: Name Z-A</option>
+  </select>
+</div>
+
 <table class="tbl" id="providers">
-  <thead><tr><th>Domain</th><th>State</th><th>Reason</th><th>Action</th></tr></thead>
+  <thead>
+    <tr>
+      <th>Provider</th>
+      <th>Streams</th>
+      <th style="text-align:center">Working</th>
+      <th style="text-align:center">Failed</th>
+      <th style="text-align:center">Unchecked</th>
+      <th style="text-align:center">Health</th>
+      <th style="text-align:center">Blacklist</th>
+      <th>State</th>
+      <th>Reason</th>
+      <th>Action</th>
+    </tr>
+  </thead>
   <tbody></tbody>
 </table>
+
 <script>
-function loadProviders(){
-  fetch('/api/providers').then(r=>r.json()).then(rows=>{
-    const tb=document.querySelector('#providers tbody');
-    tb.innerHTML=rows.map(r=>`<tr><td>${esc(r.domain)}</td>
-      <td class="${r.enabled?'on':'off'}">${r.enabled?'ENABLED':'DISABLED'}</td>
-      <td>${esc(r.disabled_reason||'')}</td>
-      <td>${r.enabled
-        ? `<button onclick="disable('${esc(r.domain)}')">Disable</button>`
-        : `<button onclick="enable('${esc(r.domain)}')">Enable</button>`}</td></tr>`).join('');
+const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function chip(val, cls, label) {
+  if (!val) return '';
+  return `<span class="chip chip-${cls}" title="${label}: ${val}">${val}</span>`;
+}
+
+function loadProviders() {
+  fetch('/api/providers').then(r => r.json()).then(rows => {
+    const search = (document.getElementById('providerSearch').value || '').toLowerCase();
+    const stateFilter = document.getElementById('filterState').value;
+    const sortKey = document.getElementById('sortBy').value;
+
+    // filter
+    let filtered = rows;
+    if (search) filtered = filtered.filter(r => (r.domain || '').toLowerCase().includes(search));
+    if (stateFilter === 'enabled') filtered = filtered.filter(r => r.enabled);
+    if (stateFilter === 'disabled') filtered = filtered.filter(r => !r.enabled);
+
+    // sort
+    const [key, dir] = sortKey.split('-');
+    filtered.sort((a, b) => {
+      let va, vb;
+      if (key === 'streams') { va = a.total_streams; vb = b.total_streams; }
+      else if (key === 'working') { va = a.working; vb = b.working; }
+      else { va = a.domain; vb = b.domain; }
+      if (typeof va === 'string') return dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+      return dir === 'asc' ? va - vb : vb - va;
+    });
+
+    // summary
+    const totals = rows.reduce((acc, r) => {
+      acc.total += r.total_streams; acc.working += r.working; acc.failed += r.failed;
+      acc.unchecked += r.unchecked; acc.bs += r.blacklist_short; acc.bp += r.blacklist_permanent;
+      return acc;
+    }, {total:0, working:0, failed:0, unchecked:0, bs:0, bp:0});
+
+    document.getElementById('summary').innerHTML = `
+      <span class="summary-item"><strong>${rows.length}</strong> providers</span>
+      <span class="summary-item"><strong>${totals.total.toLocaleString()}</strong> total streams</span>
+      <span class="summary-item"><strong style="color:#86efac">${totals.working.toLocaleString()}</strong> working</span>
+      <span class="summary-item"><strong style="color:#fca5a5">${totals.failed.toLocaleString()}</strong> failed</span>
+      <span class="summary-item"><strong style="color:#c4b5fd">${totals.unchecked.toLocaleString()}</strong> unchecked</span>
+      <span class="summary-item"><strong style="color:#fcd34d">${totals.bs}</strong> blacklist-short</span>
+      <span class="summary-item"><strong style="color:#fca5a5">${totals.bp}</strong> blacklist-perm</span>
+    `;
+
+    // table rows
+    const tb = document.querySelector('#providers tbody');
+    tb.innerHTML = filtered.map(r => {
+      const healthParts = [];
+      if (r.healthy) healthParts.push(`<span class="chip chip-healthy" title="Healthy">${r.healthy}</span>`);
+      if (r.medium) healthParts.push(`<span class="chip chip-medium" title="Medium">${r.medium}</span>`);
+      if (r.slow) healthParts.push(`<span class="chip chip-slow" title="Slow">${r.slow}</span>`);
+
+      const blParts = [];
+      if (r.blacklist_short) blParts.push(`<span class="chip chip-bs" title="Short blacklist">${r.blacklist_short}</span>`);
+      if (r.blacklist_permanent) blParts.push(`<span class="chip chip-bp" title="Permanent blacklist">${r.blacklist_permanent}</span>`);
+
+      return `<tr>
+        <td><strong>${esc(r.domain)}</strong></td>
+        <td><span class="chip chip-total">${r.total_streams}</span></td>
+        <td style="text-align:center"><span class="chip chip-working">${r.working}</span></td>
+        <td style="text-align:center"><span class="chip chip-failed">${r.failed}</span></td>
+        <td style="text-align:center"><span class="chip chip-unchecked">${r.unchecked}</span></td>
+        <td style="text-align:center"><div class="provider-stats">${healthParts.join('') || '<span class="chip" style="background:#334155;color:#64748b">-</span>'}</div></td>
+        <td style="text-align:center"><div class="provider-stats">${blParts.join('') || '<span class="chip" style="background:#334155;color:#64748b">-</span>'}</div></td>
+        <td class="${r.enabled ? 'state-enabled' : 'state-disabled'}">${r.enabled ? 'ENABLED' : 'DISABLED'}</td>
+        <td style="color:#94a3b8; font-size:0.85rem;">${esc(r.disabled_reason || '')}</td>
+        <td>${r.enabled
+          ? `<button class="action-btn btn-disable" onclick="disable('${esc(r.domain)}')">Disable</button>`
+          : `<button class="action-btn btn-enable" onclick="enable('${esc(r.domain)}')">Enable</button>`}</td>
+      </tr>`;
+    }).join('');
   });
 }
-function disable(d){
-  fetch('/api/provider/disable',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({domain:d,reason:'web'})}).then(loadProviders);
+
+function disable(d) {
+  fetch('/api/provider/disable', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({domain:d, reason:'web'})}).then(loadProviders);
 }
-function enable(d){
-  fetch('/api/provider/enable',{method:'POST',headers:{'Content-Type':'application/json'},
+function enable(d) {
+  fetch('/api/provider/enable', {method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({domain:d})}).then(loadProviders);
 }
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
 loadProviders();
 </script>
 {% endblock %}

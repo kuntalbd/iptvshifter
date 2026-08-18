@@ -73,14 +73,24 @@ def extract_domain(url: str, aggregate_subdomains: bool = True) -> str:
 
     aggregate_subdomains collapses cdn.example.com -> example.com when enabled.
     Simple heuristic: keep last two labels unless the TLD is a known multi-label
-    ccTLD (co.uk, com.br, etc.).
+    ccTLD (co.uk, com.br, etc.).  IP addresses (v4/v6) are returned as-is.
     """
     parts = urlparse(url)
     netloc = parts.netloc.lower()
-    if ":" in netloc:
-        netloc = netloc.split(":", 1)[0]
     if not netloc:
         return ""
+    # IPv6 bracket notation — extract host before port stripping
+    if netloc.startswith("["):
+        # [::1]:8080 → extract "[::1]" then strip brackets
+        bracket_end = netloc.find("]")
+        if bracket_end != -1:
+            return netloc[:bracket_end + 1]
+        return netloc
+    if ":" in netloc:
+        netloc = netloc.split(":", 1)[0]
+    # IPv4 addresses — return as-is, don't aggregate.
+    if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", netloc):
+        return netloc
     labels = netloc.split(".")
     if len(labels) <= 2:
         return netloc
