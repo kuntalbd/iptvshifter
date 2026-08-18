@@ -84,6 +84,20 @@ def create_app(cfg):
         ctx.setdefault("version", __version__)
         return env.get_template(name).render(**ctx)
 
+    async def _json_body(req: Request) -> dict:
+        """Safely parse a JSON request body.
+
+        Malformed/empty bodies raise 422 (not 500) so clients get a clear
+        signal instead of an unhandled JSONDecodeError traceback.
+        """
+        try:
+            data = await req.json()
+        except Exception:  # JSONDecodeError or empty body
+            raise HTTPException(status_code=422, detail="invalid or missing JSON body")
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=422, detail="JSON body must be an object")
+        return data
+
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # ---------- pages ----------
@@ -363,7 +377,7 @@ def create_app(cfg):
     @app.post("/api/scheduler")
     async def api_scheduler_add(req: Request):
         from .. import config as _cfg_mod
-        body = await req.json()
+        body = await _json_body(req)
         name = (body.get("name") or "").strip()
         mode = body.get("mode")
         cron = (body.get("cron") or "").strip()
@@ -386,7 +400,7 @@ def create_app(cfg):
     @app.delete("/api/scheduler")
     async def api_scheduler_del(req: Request):
         from .. import config as _cfg_mod
-        body = await req.json()
+        body = await _json_body(req)
         name = (body.get("name") or "").strip()
         sched = cfg.data.setdefault("scheduler", {})
         jobs = sched.setdefault("jobs", [])
@@ -458,7 +472,7 @@ def create_app(cfg):
 
     @app.post("/api/provider/disable")
     async def api_disable(req: Request):
-        body = await req.json()
+        body = await _json_body(req)
         db = _get_db(cfg)
         try:
             set_provider_enabled(db, body["domain"], False,
@@ -469,7 +483,7 @@ def create_app(cfg):
 
     @app.post("/api/provider/enable")
     async def api_enable(req: Request):
-        body = await req.json()
+        body = await _json_body(req)
         db = _get_db(cfg)
         try:
             set_provider_enabled(db, body["domain"], True, by="web")
@@ -480,7 +494,7 @@ def create_app(cfg):
     @app.post("/api/run")
     async def api_run(req: Request):
         from ..orchestrator import Orchestrator
-        body = await req.json()
+        body = await _json_body(req)
         job_name = body.get("job")
         mode = body.get("mode", cfg.get("validation.mode", "quick"))
         if job_name:
@@ -605,7 +619,7 @@ def create_app(cfg):
 
     @app.post("/api/favorites/add")
     async def api_favorites_add(req: Request):
-        body = await req.json()
+        body = await _json_body(req)
         db = _get_db(cfg)
         try:
             fid = db.favorite_add(
@@ -627,7 +641,7 @@ def create_app(cfg):
 
     @app.post("/api/favorites/add-existing")
     async def api_favorites_add_existing(req: Request):
-        body = await req.json()
+        body = await _json_body(req)
         db = _get_db(cfg)
         try:
             fid = db.favorite_add_existing(
@@ -644,7 +658,7 @@ def create_app(cfg):
     @app.post("/api/favorites/edit")
     async def api_favorites_edit(req: Request):
         """Edit an existing favorite (name, group, source_path, is_url, is_enabled)."""
-        body = await req.json()
+        body = await _json_body(req)
         db = _get_db(cfg)
         try:
             fid = body["id"]
@@ -666,7 +680,7 @@ def create_app(cfg):
 
     @app.post("/api/favorites/delete")
     async def api_favorites_delete(req: Request):
-        body = await req.json()
+        body = await _json_body(req)
         db = _get_db(cfg)
         try:
             db.favorite_delete(body["id"])
@@ -676,7 +690,7 @@ def create_app(cfg):
 
     @app.post("/api/favorites/set-enabled")
     async def api_favorites_set_enabled(req: Request):
-        body = await req.json()
+        body = await _json_body(req)
         db = _get_db(cfg)
         try:
             db.favorite_set_enabled(body["id"], bool(body.get("enabled", True)))
@@ -686,7 +700,7 @@ def create_app(cfg):
 
     @app.post("/api/favorites/set-group")
     async def api_favorites_set_group(req: Request):
-        body = await req.json()
+        body = await _json_body(req)
         fids = body.get("ids", [])
         group = body.get("group", "")
         if not group:
@@ -745,7 +759,7 @@ def create_app(cfg):
     @app.post("/api/generate")
     async def api_generate(req: Request):
         from pathlib import Path as _P
-        body = await req.json()
+        body = await _json_body(req)
         formats = body.get("formats", ["vlc", "kodi", "tivimate"])
         db = _get_db(cfg)
         try:

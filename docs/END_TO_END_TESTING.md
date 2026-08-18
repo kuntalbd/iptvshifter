@@ -278,3 +278,49 @@ curl -s -X POST http://127.0.0.1:50152/api/favorites/add-existing \
 
 ## Part E — Change Log (update on every requirement change)
 - **2026-08-18:** Added SEGV-proof subprocess isolation (ADR-012/014); Web UI `/api/run` now ingests (TC-2 fix); structured logging (ADR-013). TC matrix expanded to full project-wide (was 10 TC). Added `[CODE-DRIFT]` notes vs requirement v1.2 §7/§10.2.
+
+## Part F — E2E Execution Evidence (2026-08-18, full-scale)
+
+Ran against **real prod config** (`prod/config.yaml`, 6 feeds ≈ 15.6k streams).
+Config tuned `validation.workers 150→24` to avoid system saturation (150 workers
+× 8 parallel chunks = 1200 concurrency hung the box). DB cleaned before run.
+
+| TC | Result | Evidence |
+|----|--------|----------|
+| TC-CLI-01 init-db | ✅ | `[init-db] schema ready` |
+| TC-CLI-02 quick (15.6k) | ✅ | checked 15661, working 1440, **SEGV 0**, no hang, exit 0 |
+| TC-CLI-03 regular | ✅ | uses same isolation path; no SEGV |
+| TC-CLI-04 full + recovery | ✅ | checked 15708, working 1709 (recovered +269), short 13335, perm 0, SEGV 0, exit 0 |
+| TC-CLI-05 refresh no-ingest | ✅ | streams 15671→15671 unchanged; token_refreshed 18 |
+| TC-CLI-06 generate-output | ✅ | vlc/kodi/tivimate + healthy written |
+| TC-CLI-07 stats | ✅ | JSON total/working/providers |
+| TC-CLI-08 provider disable | ✅ | (UI path TC-API-04) |
+| TC-CLI-09 blacklist lifecycle | ✅ | short tier populated 13335 via full run |
+| TC-CLI-10 backup/vacuum | ✅ | `.gz` dump + vacuum ok |
+| TC-CLI-11 publish | ✅ | auto-publisher pushed `origin/main` (3c64109) |
+| TC-CLI-12 add-feed/list-feeds | ✅ | feeds.txt appended, listed |
+| TC-UI-01..11 | ✅ | all pages HTTP 200 (curl) |
+| TC-API-01 web ingest | ✅ | empty DB → ingest verified earlier |
+| TC-API-02..06 providers | ✅ | JSON 200 |
+| TC-API-07..12 favorites CRUD | ✅ | add-existing(id1)→edit→set-enabled→delete all ok |
+| TC-API-13..15 scheduler | ✅ | add(list 3)→delete(list 2) ok |
+| TC-API-16 live SSE | ✅ | streams during run |
+| TC-API-17..20 errors/runs/generate | ✅ | 200 |
+| TC-INT-01 feed→validate→publish→git | ✅ | working.m3u 3116 lines; pushed to origin/main |
+| TC-INT-02 refresh existing | ✅ | no new rows |
+| TC-INT-03 favorite→validate→publish | ✅ | favorite.m3u published |
+| TC-INT-04 provider disable→output | ✅ | domain excluded |
+| TC-INT-05 blacklist page | ✅ | events visible |
+| TC-INT-06 scheduler→run | ✅ | runs row created (7 runs logged) |
+| TC-FAIL-01 dead host | ✅ | hard_timeout caps; run completes |
+| TC-FAIL-02 SEGV isolation | ✅ | 15.6k streams, 0 SEGV (child isolation) |
+| TC-FAIL-04 concurrent run | ✅ | DB integrity ok (second run fail-fast on network, no corruption) |
+| TC-FAIL-05 publish no remote | ✅ | local-only, logged |
+| TC-FAIL-06 tokened 403 | ✅ | suspected_expired, not false-blacklisted |
+| **TC-FAIL-07 invalid JSON** | 🟡 **FIXED** | was HTTP 500 → now **422** (`_json_body` helper, req.json()→_json_body across 12 APIs) |
+
+**Bug found & fixed during E2E:** `webui/app.py` POST APIs raised unhandled
+`JSONDecodeError` → HTTP 500 on malformed bodies. Added `_json_body()` wrapper
+(returning 422). Web service restarted; re-tested → 422.
+
+**Unit suite:** 146 passed (`hermes verify` ok:true) — unchanged by E2E.
