@@ -41,8 +41,13 @@ quick run every 2 days) and publishes results to your GitHub repo after each run
 
 ## Docs
 
-- `docs/INSTALL_AND_USAGE.md` — full install + every command
+- `docs/DOC_INDEX.md` — **start here**: document map + update workflow (live docs)
+- `requirement/requirement_overview_v1.2.md` — business requirements (§1–§25)
+- `requirement/qa_test_plan_v1.md` — unit/integration test plan (P1–P10, B0–B8)
+- `docs/END_TO_END_TESTING.md` — **full project-wide E2E**: feature inventory + test matrix (incl. Web UI)
+- `docs/ARCHITECTURE.md` — component contracts, ADRs, data model
 - `docs/CONFIGURATION.md` — all config keys
+- `docs/INSTALL_AND_USAGE.md` — full install + every command
 - `docs/PROJECT_STRUCTURE.md` — source layout
 - `examples/` — `config.example.yaml`, `feeds.example.txt`, `.env.example`
 - `docker/` — `Dockerfile`, `entrypoint.sh`, `build.sh` (multi-arch)
