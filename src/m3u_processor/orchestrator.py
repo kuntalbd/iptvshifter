@@ -111,6 +111,7 @@ class Orchestrator:
         import requests
         import time as _time
         last_err = None
+        _LOG.info("feed fetch start url=%s", url)
         for attempt in range(3):
             try:
                 resp = requests.get(url, timeout=30)
@@ -122,6 +123,8 @@ class Orchestrator:
                 if resp.status_code >= 400:
                     # 4xx/5xx (e.g. 404 dead feed): do NOT crash the run.
                     # Log and skip so a single bad feed can't abort ingestion.
+                    _LOG.warning("feed fetch failed url=%s status=%s (skipped)",
+                                 url, resp.status_code)
                     self.db.log_error(self.run_id, "feed_ingest_failed",
                                      f"HTTP {resp.status_code} (skipped): {url}", url)
                     return None
@@ -133,24 +136,29 @@ class Orchestrator:
                     _time.sleep(3 * (attempt + 1))
                     last_err = str(e)
                     continue
+                _LOG.warning("feed fetch error url=%s err=%s (skipped)", url, type(e).__name__)
                 self.db.log_error(self.run_id, "feed_ingest_failed",
                                  f"{type(e).__name__}: {e} (skipped): {url}", url)
                 return None
         else:
             # exhausted retries — record and skip so one bad feed can't abort run
+            _LOG.warning("feed fetch exhausted url=%s err=%s (skipped)", url, last_err)
             self.db.log_error(self.run_id, "feed_ingest_failed",
                              f"{last_err or 'failed'} (skipped after retries): {url}", url)
             return None
+        _LOG.info("feed fetch done url=%s", url)
         parser = PlaylistParser(
             aggregate_subdomains=bool(self.config.get("providers.aggregate_subdomains", True))
         )
         streams = parser.parse_text(resp.text, source_type="remote",
                                     source_path=url, base_url=url)
+        _LOG.info("feed parsed url=%s got=%d streams", url, len(streams))
         stats = merge_into_db(self.db, streams, self.run_id)
         for s in streams:
             ensure_provider(self.db, s.provider_domain,
                             self.config.get("providers.aggregate_subdomains", True))
         self.stats["parsed"] += len(streams)
+        _LOG.info("feed merged url=%s total=%d", url, len(streams))
         return stats
 
     # --- selection ---
@@ -262,6 +270,8 @@ class Orchestrator:
         self.stats["unique"] = self.db.query("SELECT COUNT(*) FROM streams")[0][0]
         _LOG.info("eligible streams=%d total_in_db=%d (mode=%s)",
                   len(rows), self.stats["unique"], mode)
+        _LOG.info("run is started run_id=%s mode=%s eligible=%d", self.run_id, mode,
+                  len(rows))
 
         validator = StreamValidator(
             self.config, http_client=self.http_client
@@ -269,6 +279,7 @@ class Orchestrator:
         _LOG.info("validator created isolate=%s workers=%s max_concurrent=%s hard_timeout=%.0fs",
                   getattr(validator, "isolate", "?"), validator.workers,
                   validator.max_concurrent, validator.hard_timeout)
+        _LOG.info("started validation run_id=%s mode=%s total=%d", self.run_id, mode, len(rows))
         # quick mode = fast latency-only health (no 3s throughput sampling).
         # Full/regular/refresh keep throughput (Option B) for accurate scoring.
         if mode == "quick":
