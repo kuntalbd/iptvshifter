@@ -128,6 +128,7 @@ def main(argv=None):
         level=_log_cfg.get("level", "INFO"),
         log_file=_log_cfg.get("file"),
         json_format=bool(_log_cfg.get("json_format", False)),
+        log_write=bool(_log_cfg.get("log_write", True)),
     )
 
     if args.command == "init-db":

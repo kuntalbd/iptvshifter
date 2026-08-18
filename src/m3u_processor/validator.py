@@ -727,7 +727,13 @@ def _isolated_worker(cfg, config_dir, config_path, chunk_path, result_path, heal
     faulthandler.enable()
     try:
         from .logging_utils import configure_logging
-        configure_logging(level="WARNING")
+        _lcfg = (cfg or {}).get("logging", {}) or {}
+        configure_logging(
+            level=_lcfg.get("level", "WARNING"),
+            log_file=_lcfg.get("file"),
+            json_format=bool(_lcfg.get("json_format", False)),
+            log_write=bool(_lcfg.get("log_write", True)),
+        )
     except Exception:
         pass
     try:

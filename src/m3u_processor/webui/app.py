@@ -26,6 +26,7 @@ import queue
 import signal
 import subprocess
 import threading
+import time
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -208,7 +209,13 @@ def create_app(cfg):
 
     @app.get("/api/run-status")
     def api_run_status():
-        """Lightweight: is a run currently active (for discard messaging)?"""
+        """Lightweight: is a run currently active (for discard messaging)?
+
+        Keys off the DB `runs` row (status='running'), NOT a pid embedded in the
+        run_id. The web service may be restarted mid-run, which would invalidate
+        any pid-based liveness check and wrongly report 'idle' while the
+        background worker thread is still validating.
+        """
         db = _get_db(cfg)
         try:
             row = db.query(
@@ -218,13 +225,7 @@ def create_app(cfg):
             if not row:
                 return {"is_run_active": False}
             r = row[0]
-            pid = None
-            try:
-                pid = int(r["run_id"].rsplit("-", 1)[-1])
-            except Exception:
-                pid = None
-            alive = bool(pid) and _pid_alive(pid)
-            return {"is_run_active": alive, "run_id": r["run_id"], "mode": r["mode"],
+            return {"is_run_active": True, "run_id": r["run_id"], "mode": r["mode"],
                     "started_at": r["started_at"]}
         finally:
             db.close()
@@ -248,19 +249,11 @@ def create_app(cfg):
                 return {"ok": False, "error": "no active run"}
             r = row[0]
             run_id = r["run_id"]
-            pid = None
-            try:
-                pid = int(run_id.rsplit("-", 1)[-1])
-            except Exception:
-                pid = None
+            # The web-spawned run lives in a daemon worker thread of THIS process;
+            # it cannot be reached by pid (run_id no longer embeds one). Signal it
+            # via the Orchestrator's stop flag by setting a DB marker the worker
+            # polls. Cron/systemd jobs are stopped via systemctl.
             stopped = False
-            if pid and _pid_alive(pid):
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    stopped = True
-                except Exception:
-                    stopped = False
-            # also try systemctl for cron-scheduled jobs
             jobs = (cfg.get("scheduler", {}) or {}).get("jobs", []) or []
             job = next((j for j in jobs if j.get("mode") == r["mode"]), None)
             if job:
@@ -271,8 +264,17 @@ def create_app(cfg):
                     stopped = True
                 except Exception:
                     pass
+            # Mark stop-requested for the in-process worker thread (best effort).
+            try:
+                db.execute(
+                    "UPDATE runs SET status='stopping' WHERE run_id=?", (run_id,)
+                )
+                db.commit()
+                stopped = True
+            except Exception:
+                pass
             return {"ok": stopped, "run_id": run_id,
-                    "pid": pid, "method": "signal+systemctl"}
+                    "method": "db-stop-flag+systemctl"}
         finally:
             db.close()
 
@@ -509,10 +511,11 @@ def create_app(cfg):
             q.put({"type": "progress", "done": done, "total": total})
 
         # Stable web-side run id used both for SSE and DB row (passed to the
-        # Orchestrator so the discard reason / live lookups line up). Ends with
-        # the real PROCESS pid (not thread id) so the live-pid stop/status logic
-        # in api_run_status / api_run_stop keeps working for web-spawned runs.
-        run_id = f"web-{mode}-{os.getpid()}"
+        # Orchestrator so the discard reason / live lookups line up). Uses a
+        # timestamp+random suffix (NOT the process pid) so the run stays
+        # identifiable as 'running' in the DB even if the web service is
+        # restarted mid-run — api_run_status keys off the DB row, not a pid.
+        run_id = f"web-{mode}-{int(time.time()*1000)}-{os.urandom(3).hex()}"
 
         # Orchestrator + its DB live entirely in the worker thread (sqlite
         # connections are not thread-safe).

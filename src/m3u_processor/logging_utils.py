@@ -22,11 +22,15 @@ def get_logger(name: str = "m3u") -> logging.Logger:
 
 
 def configure_logging(level: str | None = None, log_file: str | None = None,
-                       json_format: bool = False) -> None:
+                       json_format: bool = False, log_write: bool = True) -> None:
     """Configure the root logger once.
 
-    level: DEBUG/INFO/WARNING (default INFO).
+    level: DEBUG/INFO/WARNING/ERROR (default INFO).
     log_file: optional path; if omitted, logs to stderr.
+    log_write: if False, NO file/stream handler is attached — logging is
+        suppressed (config-driven, e.g. logging.log_write: false). Modules that
+        already captured a reference to the root logger keep working, they just
+        emit into the void.
     """
     global _CONFIGURED
     lvl = getattr(logging, (level or "INFO").upper(), logging.INFO)
@@ -36,30 +40,33 @@ def configure_logging(level: str | None = None, log_file: str | None = None,
     for h in list(root.handlers):
         root.removeHandler(h)
 
-    handler: logging.Handler
-    if log_file:
-        try:
-            os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            handler = logging.FileHandler(log_file, encoding="utf-8")
-        except OSError:
+    # log_write: false => do not attach any handler (no file, no stderr).
+    if log_write:
+        handler: logging.Handler
+        if log_file:
+            try:
+                os.makedirs(os.path.dirname(log_file), exist_ok=True)
+                handler = logging.FileHandler(log_file, encoding="utf-8")
+            except OSError:
+                handler = logging.StreamHandler(sys.stderr)
+        else:
             handler = logging.StreamHandler(sys.stderr)
-    else:
-        handler = logging.StreamHandler(sys.stderr)
 
-    if json_format:
-        try:
-            from pythonjsonlogger import jsonlogger  # type: ignore
+        if json_format:
+            try:
+                from pythonjsonlogger import jsonlogger  # type: ignore
 
-            handler.setFormatter(
-                jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-            )
-        except Exception:
+                handler.setFormatter(
+                    jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+                )
+            except Exception:
+                handler.setFormatter(logging.Formatter(
+                    "%(asctime)s %(levelname)s %(name)s %(message)s"))
+        else:
             handler.setFormatter(logging.Formatter(
-                "%(asctime)s %(levelname)s %(name)s %(message)s"))
-    else:
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+                "%(asctime)s %(levelname)s [%(name)s] %(message)s"))
 
-    root.addHandler(handler)
+        root.addHandler(handler)
+
     root.setLevel(lvl)
     _CONFIGURED = True

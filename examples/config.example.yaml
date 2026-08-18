@@ -89,7 +89,8 @@ scheduler:
 
 # === Logging ===
 logging:
-  level: "INFO"
+  level: "INFO"          # DEBUG / INFO / WARNING / ERROR
+  log_write: true        # false => suppress all file/stderr logging
   json_format: false
   file: "./logs/m3u-processor.log"
   max_bytes: 10485760
