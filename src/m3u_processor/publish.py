@@ -23,6 +23,10 @@ import datetime
 import fcntl
 from pathlib import Path
 
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.publish")
+
 
 class FileLockish:
     """Minimal advisory file lock (fcntl.flock). No external deps.
@@ -225,9 +229,9 @@ def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") 
         except Exception:
             prev_hash = ""
         src_tag = source or "unknown"
-        print(f"[publish] run_id={run_id!r} mode={mode!r} source={src_tag!r} "
-              f"files={result['copied']} hash={content_hash[:12]} "
-              f"changed={content_hash != prev_hash}", flush=True)
+        _LOG.info("publish run_id=%s mode=%s source=%s files=%s hash=%s changed=%s",
+                  run_id, mode, src_tag, result["copied"], content_hash[:12],
+                  content_hash != prev_hash)
         if content_hash == prev_hash and prev_hash:
             # Nothing actually changed since last publish -> skip the commit.
             result["published"] = True

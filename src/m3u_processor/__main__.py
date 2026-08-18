@@ -120,6 +120,16 @@ def main(argv=None):
 
     cfg = _load_cfg(args)
 
+    # Configure structured logging from config (level / file / json) so every
+    # module's get_logger() output is observable.
+    from m3u_processor.logging_utils import configure_logging
+    _log_cfg = cfg.get("logging", {}) or {}
+    configure_logging(
+        level=_log_cfg.get("level", "INFO"),
+        log_file=_log_cfg.get("file"),
+        json_format=bool(_log_cfg.get("json_format", False)),
+    )
+
     if args.command == "init-db":
         db = _db(args, cfg)
         db.init_db(backup=cfg.get("database.backup_on_start"))

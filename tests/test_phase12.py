@@ -58,7 +58,7 @@ def test_publish_disabled_skips():
     assert res.get("skipped") == "publish disabled in config", res
 
 
-def test_publish_skips_unchanged_content(capsys):
+def test_publish_skips_unchanged_content(caplog):
     # Repeated publish of identical output must NOT create a second commit
     # (commit-storm guard). The content hash is persisted and reused.
     tmp = tempfile.mkdtemp()
@@ -73,10 +73,10 @@ def test_publish_skips_unchanged_content(capsys):
     r2 = publish_mod.publish_outputs(cfg, run_id="t2", source="test")
     assert r2["published"] is True
     assert "no content change" in (r2.get("skipped") or ""), r2
-    # audit log line present
-    out_log = capsys.readouterr().out
-    assert "[publish] run_id='t1'" in out_log, out_log
-    assert "source='test'" in out_log, out_log
+    # audit log line present (structured logging, not stdout print)
+    log_text = caplog.text
+    assert "run_id=t1" in log_text, log_text
+    assert "source=test" in log_text, log_text
 
 
 def test_publish_publishes_when_content_changes(capsys):

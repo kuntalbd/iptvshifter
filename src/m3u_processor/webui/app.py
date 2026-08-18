@@ -30,6 +30,10 @@ import threading
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from ..logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.webui")
 from pathlib import Path
 
 from .. import __version__
@@ -486,6 +490,7 @@ def create_app(cfg):
                 mode = job.get("mode", mode)
         q = queue.Queue()
 
+        _LOG.info("api_run requested mode=%s job=%s", mode, job_name)
         def progress(done, total):
             q.put({"type": "progress", "done": done, "total": total})
 
@@ -499,16 +504,38 @@ def create_app(cfg):
         # connections are not thread-safe).
         def worker():
             from ..database import Database as _DB
+            from pathlib import Path as _P
             db = _DB(cfg.get("database.path"))
             db.init_db(backup=False)
             orch = Orchestrator(db, cfg)
             orch.progress = progress
             try:
+                # Ingest configured sources first (mirrors the CLI `run` path),
+                # so a UI run on an empty DB actually populates streams instead
+                # of validating nothing. (TC-2 fix: Web UI previously skipped
+                # ingest and only re-validated existing rows.)
+                if mode != "refresh":
+                    feed_file = cfg.get("sources.feed_file")
+                    if feed_file and _P(feed_file).is_file():
+                        for line in open(feed_file):
+                            line = line.strip()
+                            if line and not line.startswith("#"):
+                                try:
+                                    orch.ingest_feed(line)
+                                except Exception as e:
+                                    _LOG.warning("api_run ingest_feed failed: %s", e)
+                    pdir = cfg.get("sources.playlist_dir")
+                    if pdir and _P(pdir).is_dir():
+                        for f in sorted(_P(pdir).glob("*.m3u*")):
+                            try:
+                                orch.ingest_source(str(f))
+                            except Exception as e:
+                                _LOG.warning("api_run ingest_source failed: %s", e)
                 stats = orch.run(mode=mode, run_id=run_id)
                 if stats.get("discarded"):
                     q.put({"type": "discarded",
-                           "reason": stats.get("discard_reason", "another run active"),
-                           "run_id": orch.run_id})
+                            "reason": stats.get("discard_reason", "another run active"),
+                            "run_id": orch.run_id})
                 else:
                     q.put({"type": "done", "stats": stats, "run_id": orch.run_id})
             except Exception as e:

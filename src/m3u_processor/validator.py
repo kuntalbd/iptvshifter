@@ -11,6 +11,9 @@ from __future__ import annotations
 import time
 import socket
 import threading
+import os
+import json
+import shutil
 import faulthandler  # SEGV/native crashes dump a C-level trace instead of silent death
 
 # Enable faulthandler so any native crash in the TLS/DNS stack (which Python
@@ -23,6 +26,10 @@ except Exception:
     pass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
+
+from .logging_utils import get_logger as _get_logger, configure_logging
+
+_time = time
 
 from .utils import merge_headers
 
@@ -137,6 +144,9 @@ class StreamValidator:
         # (the whole run hangs). A per-link daemon-thread deadline caps total time
         # no matter WHERE it stalls (DNS, TLS handshake, or slow-trickle body).
         self.hard_timeout = float(config.get("validation.hard_timeout", 20))
+        # Isolate network I/O in a child process so a native SEGV in the
+        # TLS/DNS stack cannot kill the whole pipeline (default True).
+        self.isolate = bool(config.get("validation.isolate_subprocess", True))
         # Quality / health checking (A + B), independently toggleable
         q = config.get("quality", {}) or {}
         self.latency_check = bool(q.get("latency_check", True))
@@ -179,23 +189,17 @@ class StreamValidator:
         return local
 
     def _do_request(self, method, url, headers):
-        # Cap concurrent in-flight network calls so we never overwhelm the DNS
-        # resolver / TLS stack with workers=150 simultaneous handshakes (which
-        # deadlocked the run). The semaphore serializes the actual I/O; extra
-        # worker threads queue for a slot.
-        # stream=True: we only need status + headers (reachability / Content-Type).
-        # Without it, requests buffers the ENTIRE response body, and a large or
-        # slow m3u8 playlist can hang the read far past the (connect,read) timeout
-        # -> threads pile up stuck in ssl.read and as_completed never completes
-        # -> the whole run deadlocks. Callers close() the response when done.
-        with self._net_sem:
-            if self._client:
-                return self._client(method, url, headers=headers, timeout=self.timeout,
-                                    verify=self.verify_ssl, allow_redirects=self.follow_redirects)
-            s = self._get_session()
-            return s.request(method, url, headers=headers, timeout=self.timeout,
-                             verify=self.verify_ssl, allow_redirects=self.follow_redirects,
-                             stream=True)
+        # NOTE: the global concurrency semaphore is acquired by the CALLER
+        # (validate_batch's pool worker), NOT here, so a native stall inside
+        # this function can never permanently hold the semaphore (which would
+        # exhaust it and deadlock the whole run). See validate_batch.
+        if self._client:
+            return self._client(method, url, headers=headers, timeout=self.timeout,
+                                verify=self.verify_ssl, allow_redirects=self.follow_redirects)
+        s = self._get_session()
+        return s.request(method, url, headers=headers, timeout=self.timeout,
+                         verify=self.verify_ssl, allow_redirects=self.follow_redirects,
+                         stream=True)
 
     def _scheme(self, url):
         return urlparse(url).scheme.lower()
@@ -443,55 +447,350 @@ class StreamValidator:
         return True
 
     def validate_batch(self, streams, progress=None, health: bool = True):
+        """Validate a list of streams concurrently.
+
+        If `isolate` is set (default True), the network I/O is performed in a
+        separate child PROCESS so a native SEGV in the TLS/DNS stack (which
+        Python cannot catch and which otherwise kills the whole pipeline) is
+        contained: the child dies, the parent marks that batch failed, and the
+        run continues. This is the crash-proof path.
+
+        Returns a list of (stream, Result) — identical contract to the
+        in-process path, so callers are unchanged.
+        """
+        # Isolation only helps contain native (C-level) crashes in the real TLS
+        # stack. A custom http_client (test doubles, or any non-reconstructable
+        # transport) cannot be passed to the child process, so it MUST run
+        # in-process — otherwise the child rebuilds a fresh validator without
+        # the injected client and validates against the real network.
+        if getattr(self, "isolate", True) and self._client is None:
+            try:
+                return self._validate_batch_isolated(streams, progress, health)
+            except Exception as e:  # noqa: BLE001
+                _get_logger().exception("validate_batch isolation failed, "
+                                        "falling back to in-process: %s", e)
+                return self._validate_batch_inproc(streams, progress, health)
+        return self._validate_batch_inproc(streams, progress, health)
+
+    def _validate_batch_inproc(self, streams, progress=None, health: bool = True):
         """Validate a list of streams concurrently (thread pool). Returns
         a list of (stream, Result). `health=False` runs the cheap Phase-1 pass
         (reachability only, throughput skipped) for the Solution A funnel.
 
-        Each link is bounded by a HARD wall-clock deadline (`hard_timeout`): if a
-        single validate_one exceeds it (DNS/TLS/trickle stall the request timeout
-        can't catch), the link is abandoned as a failure so the batch always
-        terminates. The ThreadPoolExecutor workers also acquire the global
-        network semaphore so we never fire unbounded concurrent DNS/TLS."""
+        Hang-safety design (critical):
+        - Each link is bounded by a HARD wall-clock deadline (`hard_timeout`):
+          a daemon thread runs validate_one; the pool worker joins with that
+          timeout and abandons the link as a failure if it overruns. This
+          catches DNS/TLS/trickle stalls the (connect,read) timeout misses.
+        - The global network semaphore is acquired HERE, in the pool worker
+          (which the join can abandon), NEVER inside the unkillable daemon
+          thread. A native stall inside the daemon thread therefore can NOT
+          hold the semaphore and exhaust it (which previously deadlocked the
+          whole run at ~75% progress).
+        - A process-global `socket.setdefaulttimeout` safety net is armed for
+          the duration of the batch so even SSL-handshake native stalls are
+          bounded (restored afterward)."""
         import threading as _threading
+        import socket as _socket
+
+        # Arm a global socket timeout safety net (last-resort against native
+        # SSL-handshake / trickle stalls that urllib3 timeouts can miss).
+        _prev_sock_to = _socket.getdefaulttimeout()
+        _socket.setdefaulttimeout(self.hard_timeout + 5)
+        _log = _get_logger()
+        _log.info("validate_batch start n=%d workers=%d hard_timeout=%.0fs",
+                  len(streams), self.workers, self.hard_timeout)
 
         def _run_one(s):
-            # hard deadline wrapper
-            box = {}
-
-            def _target():
-                try:
-                    box["r"] = self.validate_one(s, health)
-                except Exception as e:  # noqa: BLE001
-                    box["e"] = e
-
-            t = _threading.Thread(target=_target, daemon=True)
-            t.start()
-            t.join(timeout=self.hard_timeout)
-            if t.is_alive():
-                # exceeded the hard cap (trickle/TLS stall) -> treat as failure
+            # Acquire the global concurrency cap in the POOL WORKER (abandonable
+            # via the join below), with a bounded wait so we can never block
+            # forever if permits are (transiently) held by stalled threads.
+            acquired = self._net_sem.acquire(timeout=self.hard_timeout)
+            if not acquired:
                 r = Result()
                 r.url = s.original_url
-                r.reason = f"hard_timeout_{int(self.hard_timeout)}s"
+                r.reason = "sem_timeout"
                 return r
-            if "e" in box:
-                r = Result()
-                r.url = s.original_url
-                r.reason = f"exc:{type(box['e']).__name__}"
-                return r
-            return box.get("r") or Result()
+            try:
+                box = {}
+
+                def _target():
+                    try:
+                        box["r"] = self.validate_one(s, health)
+                    except Exception as e:  # noqa: BLE001
+                        box["e"] = e
+
+                t = _threading.Thread(target=_target, daemon=True)
+                t.start()
+                t.join(timeout=self.hard_timeout)
+                if t.is_alive():
+                    r = Result()
+                    r.url = s.original_url
+                    r.reason = f"hard_timeout_{int(self.hard_timeout)}s"
+                    return r
+                if "e" in box:
+                    r = Result()
+                    r.url = s.original_url
+                    r.reason = f"exc:{type(box['e']).__name__}"
+                    return r
+                return box.get("r") or Result()
+            finally:
+                self._net_sem.release()
 
         results = []
-        with ThreadPoolExecutor(max_workers=self.workers) as ex:
-            fut_map = {ex.submit(_run_one, s): s for s in streams}
-            done = 0
-            for fut in as_completed(fut_map):
-                s = fut_map[fut]
-                try:
-                    r = fut.result()
-                except Exception as e:
-                    r = Result(); r.url = s.original_url; r.reason = f"exc:{type(e).__name__}"
-                results.append((s, r))
-                done += 1
-                if progress:
-                    progress(done, len(streams))
+        done = 0
+        n = len(streams)
+        _t0 = _time.monotonic()
+        try:
+            with ThreadPoolExecutor(max_workers=self.workers) as ex:
+                fut_map = {ex.submit(_run_one, s): s for s in streams}
+                for fut in as_completed(fut_map):
+                    s = fut_map[fut]
+                    try:
+                        r = fut.result()
+                    except Exception as e:
+                        r = Result()
+                        r.url = s.original_url
+                        r.reason = f"exc:{type(e).__name__}"
+                    results.append((s, r))
+                    done += 1
+                    if progress:
+                        progress(done, n)
+                    if done % 1000 == 0:
+                        _log.info("validate_batch progress %d/%d (%.1fs)",
+                                  done, n, _time.monotonic() - _t0)
+        finally:
+            _socket.setdefaulttimeout(_prev_sock_to)
+            _log.info("validate_batch done n=%d in %.1fs", len(results),
+                      _time.monotonic() - _t0)
         return results
+
+    # ------------------------------------------------------------------
+    # Subprocess-isolated validation (crash-proof against native SEGV)
+    # ------------------------------------------------------------------
+    def _validate_batch_isolated(self, streams, progress=None, health: bool = True):
+        """Run validation in child processes so a native TLS/DNS SEGV is
+        contained. Splits the work into chunks; each chunk is validated by a
+        separate `multiprocessing` child that writes a results JSON. A child
+        that crashes (SEGV) or exceeds the wall-clock budget is terminated and
+        its streams are recorded as failures — the run never dies."""
+        import multiprocessing as _mp
+        import tempfile as _tf
+
+        # Use 'spawn' (not the Linux default 'fork'): forked children inherit
+        # the parent's module-level ThreadPoolExecutors (DNS pool) with NO
+        # worker threads, which makes pooled submissions silently stall and
+        # inflate per-link time far beyond hard_timeout. spawn starts a clean
+        # interpreter so the child re-imports and builds fresh pools.
+        try:
+            _mp.set_start_method("spawn", force=True)
+        except Exception:
+            pass
+
+        _log = _get_logger()
+        n = len(streams)
+        if n == 0:
+            return []
+        chunk = max(1, int(self.config.get("validation.isolate_chunk", 200)))
+        chunks = [streams[i:i + chunk] for i in range(0, n, chunk)]
+
+        def _ser(s):
+            return {
+                "id": getattr(s, "id", None),
+                "url": getattr(s, "url", ""),
+                "original_url": getattr(s, "original_url", ""),
+                "attributes": getattr(s, "attributes", {}) or {},
+            }
+
+        _log.info("validate_batch_isolated start n=%d chunks=%d chunk=%d workers=%d",
+                  n, len(chunks), chunk, self.workers)
+        _t0 = _time.monotonic()
+        # self.config is a Config dataclass; pass its underlying dict to the
+        # child and let the child reconstruct a Config (dotted .get support).
+        cfg = dict(self.config.data)
+        cfg.pop("logging", None)
+        config_dir = getattr(self.config, "config_dir", "")
+        config_path = getattr(self.config, "config_path", "")
+
+        workdir = _tf.mkdtemp(prefix="m3u_validate_")
+        out_dir = _tf.mkdtemp(prefix="m3u_results_")
+        chunk_paths = []
+        for i, ch in enumerate(chunks):
+            p = os.path.join(workdir, f"chunk_{i}.json")
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump([_ser(s) for s in ch], f)
+            chunk_paths.append(p)
+
+        procs = []
+        for i, p in enumerate(chunk_paths):
+            rpath = os.path.join(out_dir, f"res_{i}.json")
+            pr = _mp.Process(
+                target=_isolated_worker,
+                args=(cfg, config_dir, config_path, p, rpath, health, self.workers,
+                      self.hard_timeout, self.max_concurrent, self.retries),
+            )
+            pr.start()
+            procs.append((i, pr, rpath, chunks[i]))
+
+        # Collect chunks in PARALLEL: each subprocess validates concurrently,
+        # so total wall-clock ≈ the worst single chunk (not the sum). A
+        # per-chunk budget caps a runaway; a crashed/dead chunk is marked
+        # failed and the rest continue.
+        results = []
+        done = 0
+        n_chunks = len(procs)
+
+        def _collect_one(item):
+            i, pr, rpath, ch = item
+            budget = self.hard_timeout * max(1, (len(ch) // self.max_concurrent)) + 120
+            pr.join(timeout=budget)
+            status = "ok"
+            if pr.is_alive():
+                _log.error("validate chunk %d exceeded budget (%.0fs) -> terminate",
+                           i, budget)
+                pr.terminate()
+                try:
+                    pr.join(timeout=10)
+                except Exception:
+                    pass
+                self._append_chunk_failures(results, ch)
+                status = "timeout"
+            elif pr.exitcode is not None and pr.exitcode < 0:
+                _log.error("validate chunk %d child died (exitcode=%s) -> failures",
+                           i, pr.exitcode)
+                self._append_chunk_failures(results, ch)
+                status = "crash"
+            else:
+                self._read_chunk_results(results, ch, rpath)
+            return (i, len(ch), status)
+
+        with ThreadPoolExecutor(max_workers=max(1, min(n_chunks, 8))) as pool:
+            for i, n_ch, status in pool.map(_collect_one, procs):
+                done += n_ch
+                if progress:
+                    progress(done, n)
+        try:
+            shutil.rmtree(workdir, ignore_errors=True)
+            shutil.rmtree(out_dir, ignore_errors=True)
+        except Exception:
+            pass
+        _log.info("validate_batch_isolated done n=%d in %.1fs", len(results), _time.monotonic() - _t0)
+        return results
+
+    @staticmethod
+    def _append_chunk_failures(results, ch):
+        for s in ch:
+            r = Result()
+            r.url = getattr(s, "original_url", "")
+            r.reason = "subprocess_crash"
+            results.append((s, r))
+
+    @staticmethod
+    def _read_chunk_results(results, ch, rpath):
+        try:
+            with open(rpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            StreamValidator._scrub_failures(results, ch)
+            return
+        by_id = {getattr(s, "id", None): s for s in ch}
+        for d in data:
+            s = by_id.get(d.get("id"))
+            if s is None:
+                continue
+            r = Result()
+            r.url = d.get("url", "")
+            r.ok = bool(d.get("ok"))
+            r.status = int(d.get("status", 0) or 0)
+            r.reason = d.get("reason", "") or ""
+            r.uncheckable = bool(d.get("uncheckable"))
+            r.suspected_expired = bool(d.get("suspected_expired"))
+            r.elapsed_ms = float(d.get("elapsed_ms", 0.0) or 0.0)
+            r.throughput_kbps = float(d.get("throughput_kbps", 0.0) or 0.0)
+            r.health_score = d.get("health_score")
+            r.health_tier = d.get("health_tier")
+            results.append((s, r))
+
+    @staticmethod
+    def _scrub_failures(results, ch):
+        for s in ch:
+            r = Result()
+            r.url = getattr(s, "original_url", "")
+            r.reason = "subprocess_crash"
+            results.append((s, r))
+
+
+def _isolated_worker(cfg, config_dir, config_path, chunk_path, result_path, health,
+                     workers, hard_timeout, max_concurrent, retries):
+    """Child-process entry point: validate one chunk, write results JSON."""
+    import faulthandler
+    faulthandler.enable()
+    try:
+        from .logging_utils import configure_logging
+        configure_logging(level="WARNING")
+    except Exception:
+        pass
+    try:
+        # reconstruct a Config (StreamValidator uses dotted .get)
+        from .config import Config
+        conf = Config(_data=cfg, config_dir=config_dir or "", config_path=config_path or "")
+        with open(chunk_path, "r", encoding="utf-8") as f:
+            items = json.load(f)
+        v = StreamValidator(conf, workers=workers, retries=retries)
+        v.hard_timeout = hard_timeout
+        v.max_concurrent = max_concurrent
+        v.isolate = False
+
+        class _S:
+            def __init__(self, d):
+                self.id = d.get("id")
+                self.url = d.get("url", "")
+                self.original_url = d.get("original_url", "")
+                self.attributes = d.get("attributes", {}) or {}
+
+        streams = [_S(d) for d in items]
+        import time as _tmod
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        _chunk_t0 = _tmod.monotonic()
+
+        def _one(s):
+            try:
+                return s, v.validate_one(s, health)
+            except Exception as e:  # noqa: BLE001
+                r = Result()
+                r.reason = f"exc:{type(e).__name__}"
+                r.url = s.original_url
+                return s, r
+
+        out = []
+        # The child is ALREADY an isolated process (a SEGV only kills this
+        # chunk); run validate_one concurrently with a real pool. No nested
+        # daemon-thread wrapper needed — the subprocess boundary contains SEGVs,
+        # and request timeouts bound each link.
+        with _TPE(max_workers=max(1, workers)) as ex:
+            for s, res in ex.map(_one, streams):
+                out.append({
+                    "id": s.id,
+                    "url": res.url,
+                    "ok": res.ok,
+                    "status": res.status,
+                    "reason": res.reason,
+                    "uncheckable": res.uncheckable,
+                    "suspected_expired": res.suspected_expired,
+                    "elapsed_ms": res.elapsed_ms,
+                    "throughput_kbps": res.throughput_kbps,
+                    "health_score": res.health_score,
+                    "health_tier": res.health_tier,
+                })
+        _get_logger().info("isolated chunk validated n=%d in %.1fs",
+                           len(out), _tmod.monotonic() - _chunk_t0)
+        with open(result_path, "w", encoding="utf-8") as f:
+            json.dump(out, f)
+        # Hard exit: this child has no further work and any daemon threads
+        # still blocked in native TLS/DNS calls would otherwise stall
+        # interpreter shutdown and keep the parent's join() waiting the full
+        # budget. Results are already persisted, so _exit is safe.
+        os._exit(0)
+    except Exception:
+        os._exit(1)
+

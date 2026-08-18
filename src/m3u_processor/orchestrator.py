@@ -24,6 +24,9 @@ from .blacklist import apply_result
 from .providers import ensure_provider, provider_enabled
 from .models import Stream
 from .utils import ROTATING_TOKEN_PARAMS
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.orchestrator")
 
 
 def _is_tokened(url: str) -> bool:
@@ -229,6 +232,8 @@ class Orchestrator:
         )
         self.db.commit()
 
+        _LOG.info("run start run_id=%s mode=%s", self.run_id, mode)
+
         rows = self._eligible_rows(mode)
         # refresh mode only targets expiring (tokened) URLs. Pre-filter in SQL
         # via LIKE on the rotating-token params (avoids dragging 16k non-tokened
@@ -246,10 +251,15 @@ class Orchestrator:
             rows = self.db.query(q)
         self.stats["eligible"] = len(rows)
         self.stats["unique"] = self.db.query("SELECT COUNT(*) FROM streams")[0][0]
+        _LOG.info("eligible streams=%d total_in_db=%d (mode=%s)",
+                  len(rows), self.stats["unique"], mode)
 
         validator = StreamValidator(
             self.config, http_client=self.http_client
         )
+        _LOG.info("validator created isolate=%s workers=%s max_concurrent=%s hard_timeout=%.0fs",
+                  getattr(validator, "isolate", "?"), validator.workers,
+                  validator.max_concurrent, validator.hard_timeout)
         # quick mode = fast latency-only health (no 3s throughput sampling).
         # Full/regular/refresh keep throughput (Option B) for accurate scoring.
         if mode == "quick":
@@ -660,6 +670,11 @@ class Orchestrator:
         except Exception as e:  # noqa: BLE001
             self.stats["publish_error"] = f"publish hook crashed: {e}"
 
+        _LOG.info("run finished run_id=%s mode=%s status=%s checked=%s working=%s failed=%s duration=%s",
+                  self.run_id, getattr(self, "mode", "?"),
+                  "stopped" if self._stop else "completed",
+                  self.stats.get("checked", 0), self.stats.get("working", 0),
+                  self.stats.get("failed", 0), duration)
     def _regenerate_outputs(self):
         """Write working playlists (all working streams) from the DB into the
         configured output dir. Under a file lock so a short run finishing
