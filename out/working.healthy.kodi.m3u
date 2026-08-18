@@ -179,7 +179,7 @@ http://179.60.224.196:8000/play/a0i7/index.m3u8
 https://cdn4.zohanayaan.com:1686/hls/skyscric.m3u8?md5=QuN7vNAE3hTcZ_FmuKxy0Q&expires=1787072315
 #EXTINF:-1 tvg-logo="https://abusaeeidx.github.io/Tv-Channel-Logo/CricHD/runded/18-by-xfireflix.png" group-title="⭐ News",Sky Sports Main Event
 #KODIPROP:inputstream.adaptive.stream_headers=http-referrer=https://executeandship.com/&http-origin=https://executeandship.com
-https://cdn7.zohanayaan.com:1686/hls/skysme.m3u8?md5=86sdIWO4VFdeGmREe0I0-A&expires=1787072315
+https://cdn7.zohanayaan.com:1686/hls/skysme.m3u8?md5=ONoM2tvh-TiWWgA2d3goug&expires=1787073757
 #EXTINF:-1 tvg-id="TelevisiondelEste.do@SD" tvg-logo="https://i.imgur.com/mmjbcGr.png" group-title="⭐ News",Television del Este (1080p) [Not 24/7]
 #KODIPROP:inputstream.adaptive.stream_headers=
 https://edge.essastream.com/televisiondeleste/tracks-v1a1/mono.m3u8
@@ -2542,7 +2542,7 @@ http://181.224.255.210:8001/play/a0rq/index.m3u8
 http://23.237.104.106:8080/USA_WGN/index.m3u8
 #EXTINF:-1 tvg-logo="https://abusaeeidx.github.io/Tv-Channel-Logo/CricHD/runded/8-by-xfireflix.png" group-title="⭐ Other",Willow HD 2
 #KODIPROP:inputstream.adaptive.stream_headers=http-referrer=https://executeandship.com/&http-origin=https://executeandship.com
-https://cdn1.zohanayaan.com:1686/hls/willowextra.m3u8?md5=Q5VS-l9XB2LIqMsFI_pSpw&expires=1787072314
+https://cdn1.zohanayaan.com:1686/hls/willowextra.m3u8?md5=-MLDHMH8Rs4ueayQbdlQJA&expires=1787073753
 #EXTINF:-1 tvg-id="WLTVDT231.us@HD" tvg-logo="https://i.imgur.com/Sr3EoK5.png" group-title="⭐ Other",WLTV-DT 23.1 (720p)
 #KODIPROP:inputstream.adaptive.stream_headers=
 http://168.228.44.241:9997/play/a09d/index.m3u8
