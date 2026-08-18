@@ -88,3 +88,29 @@ def test_ingest_feed_retries_on_429(tmp_path, monkeypatch):
         pass
     assert calls["n"] >= 2, "ingest_feed should retry on 429"
     db.close()
+
+
+def test_ingest_feed_skips_404_without_crashing(tmp_path, monkeypatch):
+    """A dead feed (404) must NOT abort the whole run — it is logged and skipped."""
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path"))
+    db.init_db(backup=False)
+    orch = Orchestrator(db, cfg)
+
+    class _Resp:
+        status_code = 404
+
+        def raise_for_status(self):
+            import requests
+            raise requests.exceptions.HTTPError(response=self)
+
+    import requests
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp())
+
+    # Must return None (skipped) and NOT raise — previously 404 raised and
+    # aborted the entire run before any runs row was written.
+    result = orch.ingest_feed("http://x/dead.m3u")
+    assert result is None, "ingest_feed should skip 404, not crash"
+    errs = db.query("SELECT COUNT(*) FROM run_errors WHERE error_type='feed_ingest_failed'")
+    assert errs and errs[0][0] >= 1, "404 should be logged as feed_ingest_failed"
+    db.close()

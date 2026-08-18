@@ -119,14 +119,23 @@ class Orchestrator:
                     _time.sleep(5 * (attempt + 1))
                     last_err = "429 Too Many Requests"
                     continue
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    # 4xx/5xx (e.g. 404 dead feed): do NOT crash the run.
+                    # Log and skip so a single bad feed can't abort ingestion.
+                    self.db.log_error(self.run_id, "feed_ingest_failed",
+                                     f"HTTP {resp.status_code} (skipped): {url}", url)
+                    return None
                 break
-            except requests.exceptions.HTTPError as e:
-                if getattr(e.response, "status_code", None) == 429 and attempt < 2:
-                    _time.sleep(5 * (attempt + 1))
+            except requests.exceptions.RequestException as e:
+                # Network/DNS/timeout/any request error: retry transient ones,
+                # otherwise skip. Never abort the whole run for one bad feed.
+                if attempt < 2:
+                    _time.sleep(3 * (attempt + 1))
                     last_err = str(e)
                     continue
-                raise
+                self.db.log_error(self.run_id, "feed_ingest_failed",
+                                 f"{type(e).__name__}: {e} (skipped): {url}", url)
+                return None
         else:
             # exhausted retries — record and skip so one bad feed can't abort run
             self.db.log_error(self.run_id, "feed_ingest_failed",
