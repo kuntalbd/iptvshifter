@@ -1614,7 +1614,7 @@ https://tvenvivo.buap.mx/livestream/stream/index.m3u8
 #EXTINF:-1 tvg-logo="https://s4.gifyu.com/images/image534fa27d7683f33d.png" group-title="⭐ Bangladesh",17.Ekushey TV
 http://210.4.72.204/hls-live/livepkgr/_definst_/liveevent/livestream3.m3u8
 #EXTINF:-1 tvg-logo="https://yt3.ggpht.com/ytc/AAUvwnjwGg2XyMGxFITXm_54WBnNF_zBYcYw9n1E_PlCxoo=s900-c-k-c0x00ffffff-no-rj" group-title="⭐ Bangladesh",43.KTV Bangla
-https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?token=soheliptv01826655778
+https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?@ShamimHossainOfficial
 #EXTINF:-1 tvg-name="BTV" group-title="⭐ Bangladesh",BTV
 http://103.165.93.31:8095/btv/tracks-v1a1/mono.m3u8
 #EXTINF:-1 tvg-id="PoderdeDiosTV.bo@SD" tvg-logo="https://i.imgur.com/jUfRz3L.png" group-title="⭐ Bangladesh",Poder de Dios TV (1080p)

@@ -2990,7 +2990,7 @@ https://5ca9af4645e15.streamlock.net/mayas/videomayas/playlist.m3u8
 http://210.4.72.204/hls-live/livepkgr/_definst_/liveevent/livestream3.m3u8
 #EXTINF:-1 tvg-logo="https://yt3.ggpht.com/ytc/AAUvwnjwGg2XyMGxFITXm_54WBnNF_zBYcYw9n1E_PlCxoo=s900-c-k-c0x00ffffff-no-rj" group-title="⭐ Bangladesh",43.KTV Bangla
 #KODIPROP:inputstream.adaptive.stream_headers=
-https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?token=soheliptv01826655778
+https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?@ShamimHossainOfficial
 #EXTINF:-1 tvg-name="BTV" group-title="⭐ Bangladesh",BTV
 #KODIPROP:inputstream.adaptive.stream_headers=
 http://103.165.93.31:8095/btv/tracks-v1a1/mono.m3u8
