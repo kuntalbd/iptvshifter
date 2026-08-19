@@ -693,7 +693,7 @@ class Orchestrator:
         from .writers import write_favorites
         out = self.config.get("output.dir", "./out")
         rows = self.db.query(
-            "SELECT name, url, original_url, "
+            "SELECT name, url, original_url, extinf_raw, attributes, "
             "(SELECT GROUP_CONCAT(g.name) FROM favorite_membership m "
             " JOIN favorite_groups g ON g.id=m.group_id WHERE m.favorite_id=favorites.id) AS groups "
             "FROM favorites WHERE is_enabled=1"

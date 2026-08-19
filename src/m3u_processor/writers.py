@@ -21,6 +21,9 @@ import os
 
 from .utils import merge_headers, headers_to_vlc, headers_to_kodi, headers_to_pipe
 from .categorize import Categorizer
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.writers")
 
 
 def _as_attrs(stream):
@@ -160,6 +163,8 @@ def write_streams(streams, base_path: str, formats=("vlc", "kodi", "tivimate"),
             with open(hpath, "w", encoding="utf-8") as f:
                 f.write("\n".join(healthy_lines) + "\n")
             results[fmt + "_healthy"] = hpath
+        _LOG.info("write_streams wrote fmt=%s path=%s streams=%d",
+                  fmt, results[fmt], len(enriched))
     return results
 
 
@@ -170,46 +175,110 @@ def write_favorites(rows, out_dir: str, formats=("vlc", "kodi", "tivimate")):
     working copy) so favorite channels actually play in the client. Falls back
     to `url` (tokenless) only when `original_url` is empty.
 
-    NOTE: this intentionally publishes a token (same policy as working.m3u,
-    Decision 33). For a public repo this means the token is exposed — that is
-    accepted/intended so favorites remain playable. If a tokenless export is
-    ever needed, that is a separate concern, not this writer.
+    Includes full EXTINF attributes (tvg-id, tvg-name, tvg-logo, group-title,
+    lock) and stream headers (#EXTVLCOPT, #KODIPROP, pipe) matching
+    write_streams output quality.
     """
     os.makedirs(out_dir, exist_ok=True)
     entries = []
     for r in rows:
         name = r["name"] or r["url"] or ""
         group = (r["groups"] or "").split(",")[0].strip() or ""
-        # Publish the tokened playable `original_url` (mirrors write_streams);
-        # fall back to tokenless `url` only when original_url is empty.
         play_url = r["original_url"] or r["url"] or ""
         if not play_url:
             continue
-        entries.append((name, play_url, group))
+        attrs = {}
+        raw_attrs = r["attributes"] if isinstance(r, dict) else None
+        if raw_attrs:
+            try:
+                attrs = json.loads(raw_attrs) if isinstance(raw_attrs, str) else (raw_attrs or {})
+            except Exception:
+                attrs = {}
+        attrs["group-title"] = group
+        entries.append((name, play_url, group, attrs))
 
     results = {}
     for fmt in formats:
         if fmt == "vlc":
             path = os.path.join(out_dir, "favorite.m3u")
             lines = ["#EXTM3U"]
-            for name, url, _ in entries:
-                lines.append(f"#EXTINF:-1,{name}")
+            for name, url, _, attrs in entries:
+                tvg_keys = [
+                    ("tvg-id", attrs.get("tvg-id")),
+                    ("tvg-name", attrs.get("tvg-name")),
+                    ("tvg-logo", attrs.get("tvg-logo")),
+                    ("group-title", attrs.get("group-title")),
+                ]
+                tvg_str = " ".join(f'{k}="{v}"' for k, v in tvg_keys if v)
+                head = "#EXTINF:-1"
+                if tvg_str:
+                    head += " " + tvg_str
+                if attrs.get("lock"):
+                    head += ' lock="true"'
+                head += f",{name}"
+                lines.append(head)
+                merged = merge_headers(
+                    attrs.get("vlc_options", {}), attrs.get("http_options", {}),
+                    attrs.get("kodi_headers", {}), attrs.get("pipe_headers", {}),
+                )
+                for h in headers_to_vlc(merged):
+                    lines.append(h)
                 lines.append(url)
         elif fmt == "kodi":
             path = os.path.join(out_dir, "favorite.kodi.m3u")
             lines = ["#EXTM3U"]
-            for name, url, _ in entries:
-                lines.append(f'#EXTINF:-1 tvg-name="{name}",{name}')
+            for name, url, _, attrs in entries:
+                tvg_keys = [
+                    ("tvg-id", attrs.get("tvg-id")),
+                    ("tvg-name", attrs.get("tvg-name")),
+                    ("tvg-logo", attrs.get("tvg-logo")),
+                    ("group-title", attrs.get("group-title")),
+                ]
+                tvg_str = " ".join(f'{k}="{v}"' for k, v in tvg_keys if v)
+                head = "#EXTINF:-1"
+                if tvg_str:
+                    head += " " + tvg_str
+                if attrs.get("lock"):
+                    head += ' lock="true"'
+                head += f",{name}"
+                lines.append(head)
+                merged = merge_headers(
+                    attrs.get("vlc_options", {}), attrs.get("http_options", {}),
+                    attrs.get("kodi_headers", {}), attrs.get("pipe_headers", {}),
+                )
+                lines.append(headers_to_kodi(merged))
                 lines.append(url)
         elif fmt == "tivimate":
             path = os.path.join(out_dir, "favorite.tivimate.m3u")
             lines = ["#EXTM3U"]
-            for name, url, g in entries:
-                lines.append(f'#EXTINF:-1 group-title="{g}",{name}')
-                lines.append(url + (f"|group-title={g}" if g else ""))
+            for name, url, _, attrs in entries:
+                tvg_keys = [
+                    ("tvg-id", attrs.get("tvg-id")),
+                    ("tvg-name", attrs.get("tvg-name")),
+                    ("tvg-logo", attrs.get("tvg-logo")),
+                    ("group-title", attrs.get("group-title")),
+                ]
+                tvg_str = " ".join(f'{k}="{v}"' for k, v in tvg_keys if v)
+                head = "#EXTINF:-1"
+                if tvg_str:
+                    head += " " + tvg_str
+                if attrs.get("lock"):
+                    head += ' lock="true"'
+                head += f",{name}"
+                lines.append(head)
+                merged = merge_headers(
+                    attrs.get("vlc_options", {}), attrs.get("http_options", {}),
+                    attrs.get("kodi_headers", {}), attrs.get("pipe_headers", {}),
+                )
+                tail = headers_to_pipe(merged)
+                lines.append(url + ("|" + tail if tail else ""))
         else:
             continue
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         results[fmt] = path
+        _LOG.info("write_favorites wrote fmt=%s path=%s entries=%d",
+                  fmt, results[fmt], len(entries))
+    return results
+    _LOG.info("write_favorites wrote formats=%s entries=%d", list(results.keys()), len(entries))
     return results

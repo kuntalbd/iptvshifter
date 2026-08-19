@@ -217,3 +217,163 @@ def test_run_status_uses_is_run_active(client):
 def test_live_uses_is_run_active(client):
     r = client.get("/api/live")
     assert "is_run_active" in r.json()
+
+
+def test_favorite_toggle_add_and_remove(tmp_path):
+    """Toggle favorite: add then remove by stream URL."""
+    from m3u_processor.database import Database
+    from m3u_processor.webui.app import create_app
+    from m3u_processor import config as cfg_mod
+    from fastapi.testclient import TestClient
+
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    db.execute(
+        "INSERT INTO streams(name, url, original_url, provider_domain, source_type) VALUES(?,?,?,?,?)",
+        ("TestStream", "http://example.com/test.m3u", "http://example.com/test.m3u?tok=1", "example.com", "remote"))
+    db.commit()
+    db.close()
+
+    app = create_app(cfg)
+    c = TestClient(app)
+
+    # toggle ON
+    r = c.post("/api/favorites/toggle", json={"url": "http://example.com/test.m3u"})
+    assert r.json()["ok"] and r.json()["action"] == "added"
+
+    # streams API shows is_favorite=1
+    s = c.get("/api/streams?q=TestStream").json()
+    assert len(s) == 1 and s[0]["is_favorite"] == 1
+
+    # toggle OFF
+    r = c.post("/api/favorites/toggle", json={"url": "http://example.com/test.m3u"})
+    assert r.json()["ok"] and r.json()["action"] == "removed"
+
+    # streams API shows is_favorite=0
+    s = c.get("/api/streams?q=TestStream").json()
+    assert len(s) == 1 and s[0]["is_favorite"] == 0
+
+
+def test_favorite_batch_add_and_remove(tmp_path):
+    """Batch add and batch remove favorites."""
+    from m3u_processor.database import Database
+    from m3u_processor.webui.app import create_app
+    from m3u_processor import config as cfg_mod
+    from fastapi.testclient import TestClient
+
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    for i in range(3):
+        db.execute(
+            "INSERT INTO streams(name, url, original_url, provider_domain, source_type) VALUES(?,?,?,?,?)",
+            (f"Stream{i}", f"http://example.com/s{i}.m3u", f"http://example.com/s{i}.m3u?tok=1", "example.com", "remote"))
+    db.commit()
+    db.close()
+
+    app = create_app(cfg)
+    c = TestClient(app)
+
+    # batch add
+    r = c.post("/api/favorites/batch-add", json={"urls": [
+        "http://example.com/s0.m3u", "http://example.com/s1.m3u", "http://example.com/s2.m3u"]})
+    assert r.json()["ok"] and r.json()["added"] == 3
+
+    # verify 3 favorites exist
+    rows = c.get("/api/favorites").json()
+    assert len(rows) == 3
+
+    # batch remove
+    ids = [r["id"] for r in rows]
+    r = c.post("/api/favorites/batch-remove", json={"ids": ids})
+    assert r.json()["ok"] and r.json()["removed"] == 3
+    assert len(c.get("/api/favorites").json()) == 0
+
+
+def test_favorite_edit_group_updates_membership(tmp_path):
+    """Editing a favorite's group via API should update the membership table."""
+    from m3u_processor.database import Database
+    from m3u_processor.webui.app import create_app
+    from m3u_processor import config as cfg_mod
+    from fastapi.testclient import TestClient
+
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    fid = db.favorite_add("test", "http://x/t.m3u")
+    db.close()
+
+    app = create_app(cfg)
+    c = TestClient(app)
+
+    # set group via edit
+    r = c.post("/api/favorites/edit", json={"id": fid, "name": "updated", "group": "my-group"})
+    assert r.json()["ok"]
+
+    # verify group is set
+    rows = c.get("/api/favorites").json()
+    assert len(rows) == 1
+    assert rows[0]["groups"] == "my-group"
+    assert rows[0]["name"] == "updated"
+
+    # change group
+    r = c.post("/api/favorites/edit", json={"id": fid, "group": "other-group"})
+    assert r.json()["ok"]
+    rows = c.get("/api/favorites").json()
+    assert rows[0]["groups"] == "other-group"
+
+
+def test_favorite_delete_cleans_orphan_groups(tmp_path):
+    """Deleting a favorite should clean up orphaned groups."""
+    from m3u_processor.database import Database
+    from m3u_processor.webui.app import create_app
+    from m3u_processor import config as cfg_mod
+    from fastapi.testclient import TestClient
+
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    fid = db.favorite_add("test", "http://x/t.m3u")
+    db.favorite_set_group([fid], "temp-group")
+    db.close()
+
+    app = create_app(cfg)
+    c = TestClient(app)
+
+    # group exists
+    groups = c.get("/api/favorite-groups").json()
+    assert any(g["name"] == "temp-group" for g in groups)
+
+    # delete favorite
+    c.post("/api/favorites/delete", json={"id": fid})
+
+    # orphan group should be cleaned up
+    groups = c.get("/api/favorite-groups").json()
+    assert not any(g["name"] == "temp-group" for g in groups)
+
+
+def test_streams_api_shows_is_favorite(tmp_path):
+    """Streams API should return is_favorite field."""
+    from m3u_processor.database import Database
+    from m3u_processor.webui.app import create_app
+    from m3u_processor import config as cfg_mod
+    from fastapi.testclient import TestClient
+
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    db.execute(
+        "INSERT INTO streams(name, url, original_url, provider_domain, source_type) VALUES(?,?,?,?,?)",
+        ("FavStream", "http://example.com/fav.m3u", "http://example.com/fav.m3u", "example.com", "remote"))
+    db.commit()
+    db.close()
+
+    app = create_app(cfg)
+    c = TestClient(app)
+
+    # not favorited
+    s = c.get("/api/streams?q=FavStream").json()
+    assert s[0]["is_favorite"] == 0
+
+    # add as favorite
+    c.post("/api/favorites/add-existing", json={"url": "http://example.com/fav.m3u"})
+
+    # now favorited
+    s = c.get("/api/streams?q=FavStream").json()
+    assert s[0]["is_favorite"] == 1
