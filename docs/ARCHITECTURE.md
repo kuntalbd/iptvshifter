@@ -93,7 +93,8 @@ This is the contract. Any deviation is a bug.
   the source playlist.
 - New/unvalidated streams (`is_working IS NULL`) are **only ever validated**
   by `quick`/`regular`/`full`. If those modes never run, NULL streams stay
-  NULL forever — yet `write_streams` still publishes them (see §4).
+  NULL forever — and since 2026-08-19 (ADR-009) they are **excluded** from
+  the published playlist (see §4).
 - **Validation is batched & persisted progressively**, NOT all-at-once at the
   end. A long run (15k+ streams) takes 20-30 min; progress shows in the UI
   (`/live`). Mid-run the DB may still show many `is_working IS NULL` rows —
@@ -108,17 +109,11 @@ This is the contract. Any deviation is a bug.
 ## 4. Publish / Output Pipeline
 
 `write_streams` (writers.py) renders `out/working.m3u` (+ kodi/tivimate) from
-`streams WHERE enabled=1 AND blacklist_tier='none' AND (is_working=1 OR
-is_working IS NULL)`.
-
-> **Design gap (ADR-009):** `IS NULL` is allowed, so unvalidated streams
-> appear in the published playlist even though they were never tested.
-> Decision pending: either exclude NULL, or guarantee a validation run before
-> publish. **Operational guidance:** the `quick`/`regular`/`full` scheduler jobs
-> MUST run on a cadence (e.g. `quick-run` timer) so new ingest rows get validated
-> and `is_working` is set. A `refresh`-only schedule leaves new rows NULL forever
-> (they are still published, untested) — this is the cause of the "why 2685 NULL"
-> investigation (2026-08-17).
+`streams WHERE enabled=1 AND blacklist_tier='none' AND is_working=1` — **only
+verified-working streams are published** (ADR-009, resolved 2026-08-19:
+`is_working IS NULL` rows are excluded, so unvalidated links never reach the
+playlist). New ingest rows appear in `working.m3u` only after a
+`quick`/`regular`/`full` run validates them.
 
 `write_favorites` renders `out/favorite.*.m3u` from `favorites WHERE
 is_enabled=1`. Per **ADR-008 (Option B)**, the published favorite URL uses the

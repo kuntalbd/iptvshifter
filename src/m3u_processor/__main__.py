@@ -10,6 +10,10 @@ import os
 import sys
 from pathlib import Path
 
+from m3u_processor.logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.cli")
+
 SYS_PATH_READY = False
 
 
@@ -129,7 +133,10 @@ def main(argv=None):
         log_file=_log_cfg.get("file"),
         json_format=bool(_log_cfg.get("json_format", False)),
         log_write=bool(_log_cfg.get("log_write", True)),
+        max_bytes=_log_cfg.get("max_bytes"),
+        backup_count=_log_cfg.get("backup_count"),
     )
+    _LOG.info("cli command=%s argv=%s", args.command, sys.argv[1:])
 
     if args.command == "init-db":
         db = _db(args, cfg)
@@ -199,7 +206,7 @@ def main(argv=None):
         rows = db.query(
             "SELECT url, original_url, attributes, name, provider_domain, "
             "health_tier, health_score FROM streams "
-            "WHERE enabled=1 AND blacklist_tier='none' AND (is_working=1 OR is_working IS NULL)"
+            "WHERE enabled=1 AND blacklist_tier='none' AND is_working=1"
         )
         categories_cfg = cfg.get("categories")
         quality_cfg = cfg.get("quality")

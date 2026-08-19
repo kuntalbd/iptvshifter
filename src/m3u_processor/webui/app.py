@@ -1015,7 +1015,7 @@ def create_app(cfg):
                 "SELECT url, original_url, attributes, name, provider_domain, "
                 "health_tier FROM streams "
                 "WHERE enabled=1 AND blacklist_tier='none' "
-                "AND (is_working=1 OR is_working IS NULL)"
+                "AND is_working=1"
             )
             results = write_streams(
                 rows, out, formats=formats,

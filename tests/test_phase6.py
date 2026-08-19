@@ -144,6 +144,31 @@ def test_fresh_eye_serve_port_configurable():
     assert resolved2 == 7000
 
 
+def test_unverified_streams_excluded_from_output():
+    """ADR-009: write_streams/generate-output must publish ONLY is_working=1
+    streams — unverified (NULL) links must never reach the playlist."""
+    tmp = tempfile.mkdtemp()
+    cfgp, dbp = _cfg_path(tmp)
+    db = Database(dbp); db.init_db(backup=False)
+    parser = PlaylistParser()
+    s = parser.parse_text(
+        "#EXTM3U\n#EXTINF:-1,Verified\nhttp://e.com/ok.m3u8\n"
+        "#EXTINF:-1,Unverified\nhttp://e.com/unverified.m3u8\n",
+        source_type="local", source_path="x.m3u")
+    merge_into_db(db, s, "seed")
+    # only stream 1 is verified-working; stream 2 stays NULL (unchecked)
+    db.execute("UPDATE streams SET is_working=1, blacklist_tier='none' WHERE url='http://e.com/ok.m3u8'")
+    db.commit()
+    out = os.path.join(tmp, "out", "working.m3u")
+    rc = main(["--config", cfgp, "generate-output", "--out", out, "--formats", "vlc"])
+    assert rc == 0
+    content = open(out).read()
+    assert "http://e.com/ok.m3u8" in content
+    assert "http://e.com/unverified.m3u8" not in content, \
+        "unverified (is_working IS NULL) stream must NOT be published"
+    db.close()
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

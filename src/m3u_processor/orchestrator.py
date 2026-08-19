@@ -792,7 +792,7 @@ class Orchestrator:
         rows = self.db.query(
             "SELECT url, original_url, attributes, name, provider_domain, "
             "health_tier, health_score FROM streams "
-            "WHERE enabled=1 AND blacklist_tier='none' AND (is_working=1 OR is_working IS NULL)"
+            "WHERE enabled=1 AND blacklist_tier='none' AND is_working=1"
         )
         results = write_streams(
             rows, out,
