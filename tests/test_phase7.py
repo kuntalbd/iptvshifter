@@ -60,7 +60,8 @@ def test_api_streams_and_providers():
     s = c.get("/api/streams").json()
     assert len(s) == 1 and s[0]["name"] == "CNN"
     p = c.get("/api/providers").json()
-    assert any(x["domain"] == "example.com" for x in p)
+    providers_list = p.get("providers", p) if isinstance(p, dict) else p
+    assert any(x["domain"] == "example.com" for x in providers_list)
     st = c.get("/api/health-stats").json()
     assert "healthy" in st and "last_refresh_at" in st  # endpoint present
     # note: /api/stats removed in favor of /api/health-stats
@@ -75,11 +76,13 @@ def test_api_provider_disable_enable():
     r = c.post("/api/provider/disable", json={"domain": "example.com", "reason": "t"})
     assert r.json()["ok"]
     p = c.get("/api/providers").json()
-    assert [x for x in p if x["domain"] == "example.com"][0]["enabled"] == 0
+    pl = p.get("providers", p) if isinstance(p, dict) else p
+    assert [x for x in pl if x["domain"] == "example.com"][0]["enabled"] == 0
     r = c.post("/api/provider/enable", json={"domain": "example.com"})
     assert r.json()["ok"]
     p = c.get("/api/providers").json()
-    assert [x for x in p if x["domain"] == "example.com"][0]["enabled"] == 1
+    pl = p.get("providers", p) if isinstance(p, dict) else p
+    assert [x for x in pl if x["domain"] == "example.com"][0]["enabled"] == 1
 
 
 def test_api_generate_writes_files():

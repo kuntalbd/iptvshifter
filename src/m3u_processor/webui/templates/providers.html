@@ -23,25 +23,31 @@
   .summary-bar { display:flex; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
   .summary-item { font-size:0.85rem; color:#94a3b8; }
   .summary-item strong { color:#e2e8f0; }
+  .pagination { display:flex; gap:6px; align-items:center; justify-content:center; margin-top:16px; }
+  .pagination button { padding:4px 10px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0; cursor:pointer; font-size:0.8rem; }
+  .pagination button:disabled { opacity:0.4; cursor:default; }
+  .pagination button.active { background:#3b82f6; border-color:#3b82f6; color:#fff; }
+  .pagination span { color:#94a3b8; font-size:0.85rem; }
 </style>
 
 <h1>Providers</h1>
 <div class="summary-bar" id="summary"></div>
 
 <div style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-  <input id="providerSearch" placeholder="Search provider..." style="padding:6px 10px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0; min-width:200px;" oninput="loadProviders()">
-  <select id="filterState" style="padding:6px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0;" onchange="loadProviders()">
+  <input id="providerSearch" placeholder="Search provider..." style="padding:6px 10px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0; min-width:200px;">
+  <select id="filterState" style="padding:6px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0;">
     <option value="">All States</option>
     <option value="enabled">Enabled Only</option>
     <option value="disabled">Disabled Only</option>
   </select>
-  <select id="sortBy" style="padding:6px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0;" onchange="loadProviders()">
+  <select id="sortBy" style="padding:6px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0;">
     <option value="streams-desc">Sort: Most Streams</option>
     <option value="streams-asc">Sort: Fewest Streams</option>
     <option value="working-desc">Sort: Most Working</option>
     <option value="name-asc">Sort: Name A-Z</option>
     <option value="name-desc">Sort: Name Z-A</option>
   </select>
+  <span id="resultCount" style="color:#64748b; font-size:0.85rem;"></span>
 </div>
 
 <table class="tbl" id="providers">
@@ -61,58 +67,43 @@
   </thead>
   <tbody></tbody>
 </table>
+<div class="pagination" id="pagination"></div>
 
 <script>
 const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-function chip(val, cls, label) {
-  if (!val) return '';
-  return `<span class="chip chip-${cls}" title="${label}: ${val}">${val}</span>`;
+let currentPage = 1;
+let debounceTimer = null;
+
+function debounce(fn, ms) {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(fn, ms);
 }
 
-function loadProviders() {
-  fetch('/api/providers').then(r => r.json()).then(rows => {
-    const search = (document.getElementById('providerSearch').value || '').toLowerCase();
-    const stateFilter = document.getElementById('filterState').value;
-    const sortKey = document.getElementById('sortBy').value;
+function loadProviders(page) {
+  currentPage = page || 1;
+  const search = (document.getElementById('providerSearch').value || '').trim();
+  const state = document.getElementById('filterState').value;
+  const sort = document.getElementById('sortBy').value;
+  const params = new URLSearchParams({search, state, sort, page: currentPage, per_page: 50});
 
-    // filter
-    let filtered = rows;
-    if (search) filtered = filtered.filter(r => (r.domain || '').toLowerCase().includes(search));
-    if (stateFilter === 'enabled') filtered = filtered.filter(r => r.enabled);
-    if (stateFilter === 'disabled') filtered = filtered.filter(r => !r.enabled);
-
-    // sort
-    const [key, dir] = sortKey.split('-');
-    filtered.sort((a, b) => {
-      let va, vb;
-      if (key === 'streams') { va = a.total_streams; vb = b.total_streams; }
-      else if (key === 'working') { va = a.working; vb = b.working; }
-      else { va = a.domain; vb = b.domain; }
-      if (typeof va === 'string') return dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-      return dir === 'asc' ? va - vb : vb - va;
-    });
-
-    // summary
-    const totals = rows.reduce((acc, r) => {
-      acc.total += r.total_streams; acc.working += r.working; acc.failed += r.failed;
-      acc.unchecked += r.unchecked; acc.bs += r.blacklist_short; acc.bp += r.blacklist_permanent;
-      return acc;
-    }, {total:0, working:0, failed:0, unchecked:0, bs:0, bp:0});
-
+  fetch('/api/providers?' + params).then(r => r.json()).then(data => {
+    const rows = data.providers;
+    const t = data.totals || {};
     document.getElementById('summary').innerHTML = `
-      <span class="summary-item"><strong>${rows.length}</strong> providers</span>
-      <span class="summary-item"><strong>${totals.total.toLocaleString()}</strong> total streams</span>
-      <span class="summary-item"><strong style="color:#86efac">${totals.working.toLocaleString()}</strong> working</span>
-      <span class="summary-item"><strong style="color:#fca5a5">${totals.failed.toLocaleString()}</strong> failed</span>
-      <span class="summary-item"><strong style="color:#c4b5fd">${totals.unchecked.toLocaleString()}</strong> unchecked</span>
-      <span class="summary-item"><strong style="color:#fcd34d">${totals.bs}</strong> blacklist-short</span>
-      <span class="summary-item"><strong style="color:#fca5a5">${totals.bp}</strong> blacklist-perm</span>
+      <span class="summary-item"><strong>${(t.total_providers||0).toLocaleString()}</strong> providers</span>
+      <span class="summary-item"><strong>${(t.total_streams||0).toLocaleString()}</strong> total streams</span>
+      <span class="summary-item"><strong style="color:#86efac">${(t.working||0).toLocaleString()}</strong> working</span>
+      <span class="summary-item"><strong style="color:#fca5a5">${(t.failed||0).toLocaleString()}</strong> failed</span>
+      <span class="summary-item"><strong style="color:#c4b5fd">${(t.unchecked||0).toLocaleString()}</strong> unchecked</span>
+      <span class="summary-item"><strong style="color:#fcd34d">${t.blacklist_short||0}</strong> blacklist-short</span>
+      <span class="summary-item"><strong style="color:#fca5a5">${t.blacklist_permanent||0}</strong> blacklist-perm</span>
     `;
+    document.getElementById('resultCount').textContent =
+      `Showing ${rows.length} of ${data.total} providers (page ${data.page}/${data.total_pages})`;
 
-    // table rows
     const tb = document.querySelector('#providers tbody');
-    tb.innerHTML = filtered.map(r => {
+    tb.innerHTML = rows.map(r => {
       const healthParts = [];
       if (r.healthy) healthParts.push(`<span class="chip chip-healthy" title="Healthy">${r.healthy}</span>`);
       if (r.medium) healthParts.push(`<span class="chip chip-medium" title="Medium">${r.medium}</span>`);
@@ -123,7 +114,7 @@ function loadProviders() {
       if (r.blacklist_permanent) blParts.push(`<span class="chip chip-bp" title="Permanent blacklist">${r.blacklist_permanent}</span>`);
 
       return `<tr>
-        <td><strong>${esc(r.domain)}</strong></td>
+        <td><a href="/streams?provider=${encodeURIComponent(r.domain)}" style="color:#93c5fd;text-decoration:none;font-weight:600;" title="View streams for ${esc(r.domain)}">${esc(r.domain)}</a></td>
         <td><span class="chip chip-total">${r.total_streams}</span></td>
         <td style="text-align:center"><span class="chip chip-working">${r.working}</span></td>
         <td style="text-align:center"><span class="chip chip-failed">${r.failed}</span></td>
@@ -137,18 +128,42 @@ function loadProviders() {
           : `<button class="action-btn btn-enable" onclick="enable('${esc(r.domain)}')">Enable</button>`}</td>
       </tr>`;
     }).join('');
+
+    renderPagination(data.total_pages, data.page);
   });
+}
+
+function renderPagination(totalPages, current) {
+  const el = document.getElementById('pagination');
+  if (totalPages <= 1) { el.innerHTML = ''; return; }
+  let html = '';
+  html += `<button ${current<=1?'disabled':''} onclick="loadProviders(${current-1})">&laquo; Prev</button>`;
+  const start = Math.max(1, current - 3);
+  const end = Math.min(totalPages, current + 3);
+  if (start > 1) html += `<button onclick="loadProviders(1)">1</button>`;
+  if (start > 2) html += `<span>...</span>`;
+  for (let i = start; i <= end; i++) {
+    html += `<button class="${i===current?'active':''}" onclick="loadProviders(${i})">${i}</button>`;
+  }
+  if (end < totalPages - 1) html += `<span>...</span>`;
+  if (end < totalPages) html += `<button onclick="loadProviders(${totalPages})">${totalPages}</button>`;
+  html += `<button ${current>=totalPages?'disabled':''} onclick="loadProviders(${current+1})">Next &raquo;</button>`;
+  el.innerHTML = html;
 }
 
 function disable(d) {
   fetch('/api/provider/disable', {method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({domain:d, reason:'web'})}).then(loadProviders);
+    body:JSON.stringify({domain:d, reason:'web'})}).then(() => loadProviders(currentPage));
 }
 function enable(d) {
   fetch('/api/provider/enable', {method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({domain:d})}).then(loadProviders);
+    body:JSON.stringify({domain:d})}).then(() => loadProviders(currentPage));
 }
 
-loadProviders();
+document.getElementById('providerSearch').addEventListener('input', () => debounce(() => loadProviders(1), 300));
+document.getElementById('filterState').addEventListener('change', () => loadProviders(1));
+document.getElementById('sortBy').addEventListener('change', () => loadProviders(1));
+
+loadProviders(1);
 </script>
 {% endblock %}

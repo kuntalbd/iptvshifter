@@ -12,6 +12,10 @@ import shutil
 import json
 from datetime import datetime, timezone
 
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.database")
+
 SCHEMA_VERSION = 1
 
 PRAGMAS = [
@@ -115,12 +119,11 @@ CREATE TABLE IF NOT EXISTS favorites (
     name TEXT DEFAULT '',
     url TEXT NOT NULL,
     original_url TEXT DEFAULT '',
-    group_title TEXT DEFAULT '',
-    source_path TEXT,                -- source file/URL for token re-extract (like streams)
-    is_url BOOLEAN DEFAULT 0,        -- 1 if source_path is a remote URL
+    source_path TEXT,
+    is_url BOOLEAN DEFAULT 0,
     extinf_raw TEXT,
     attributes JSON,
-    is_enabled BOOLEAN DEFAULT 1,    -- item on/off -> excluded from final export when 0
+    is_enabled BOOLEAN DEFAULT 1,
     is_working BOOLEAN DEFAULT NULL,
     is_working_checked DATETIME,
     last_working DATETIME,
@@ -202,7 +205,11 @@ class Database:
     def init_db(self, backup: bool = True):
         """Create schema and run migrations. Idempotent."""
         if backup and os.path.exists(self.path):
-            self.backup_db()
+            try:
+                self.backup_db()
+            except Exception as e:  # noqa: BLE001
+                _LOG.warning("backup before init failed (continuing) path=%s err=%s",
+                             self.path, e)
         c = self.writer
         c.executescript(STREAMS_DDL)
         for idx in INDEX_DDL:
@@ -222,6 +229,7 @@ class Database:
         )
         c.commit()
         self._run_migrations()
+        _LOG.info("init_db path=%s schema_version=%s", self.path, SCHEMA_VERSION)
 
     def _run_migrations(self):
         """Hook for future schema upgrades keyed on stored schema_version."""
@@ -239,6 +247,7 @@ class Database:
         ):
             if col not in cols:
                 self.writer.execute(f"ALTER TABLE streams ADD COLUMN {col} {ctype}")
+                _LOG.debug("migration streams +col %s", col)
         # Migration: add progress_json to runs (idempotent, for Live UI).
         rcols = {r[1] for r in self.writer.execute("PRAGMA table_info(runs)")}
         if "progress_json" not in rcols:
@@ -264,7 +273,7 @@ class Database:
         if "origin_url" in fcols and "original_url" not in fcols:
             self.writer.execute("ALTER TABLE favorites RENAME COLUMN origin_url TO original_url")
             fcols = {r[1] for r in self.writer.execute("PRAGMA table_info(favorites)")}
-        for dcol in ("token_refresh_enabled", "token_expires_at"):
+        for dcol in ("token_refresh_enabled", "token_expires_at", "group_title"):
             if dcol in fcols:
                 self.writer.execute(f"ALTER TABLE favorites DROP COLUMN {dcol}")
         fav_add = {
@@ -285,6 +294,7 @@ class Database:
                 (str(SCHEMA_VERSION),),
             )
             self.writer.commit()
+            _LOG.info("migrations applied schema_version %s -> %s", version, SCHEMA_VERSION)
 
     def backup_db(self, output: str | None = None) -> str:
         """Gzip-dump the DB (§22 backup). Returns backup path."""
@@ -296,11 +306,13 @@ class Database:
             dump = "\n".join(conn.iterdump())
         with gzip.open(out, "wt") as f:
             f.write(dump)
+        _LOG.info("backup wrote=%s", out)
         return out
 
     def vacuum(self):
         self.writer.execute("VACUUM")
         self.writer.commit()
+        _LOG.info("vacuum path=%s", self.path)
 
     # --- convenience helpers used by later phases ---
     def execute(self, sql: str, params=()):
@@ -316,7 +328,7 @@ class Database:
         return self.writer.execute(sql, params).fetchall()
 
     # --- favorites subsystem (separate from main streams pipeline) ---
-    def favorite_add(self, name, url, original_url="", group_title="",
+    def favorite_add(self, name, url, original_url="",
                      source_path="", is_url=0, extinf_raw="", attributes=None,
                      is_enabled=1):
         """Add a manual favorite. `source_path`/`is_url` are optional: if a
@@ -324,10 +336,10 @@ class Database:
         can re-extract a fresh token from that source."""
         c = self.writer
         cur = c.execute(
-            "INSERT INTO favorites(name, url, original_url, group_title, "
+            "INSERT INTO favorites(name, url, original_url, "
             "source_path, is_url, extinf_raw, attributes, is_enabled) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
-            (name or "", url, original_url or "", group_title or "",
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (name or "", url, original_url or "",
              source_path or "", 1 if is_url else 0, extinf_raw or "",
              json.dumps(attributes or {}), 1 if is_enabled else 0),
         )
@@ -335,8 +347,8 @@ class Database:
         self.writer.commit()
         return fid
 
-    def favorite_add_existing(self, stream_url, name="", group_title="",
-                             source_path=None, is_url=None):
+    def favorite_add_existing(self, stream_url, name="",
+                              source_path=None, is_url=None):
         """Add a favorite from an existing streams row, copying its tokened
         origin + source (so refresh can re-extract the token later)."""
         row = self.writer.execute(
@@ -346,13 +358,8 @@ class Database:
         ).fetchone()
         if not row:
             return None
-        # Mirror streams storage: `url` is the tokenless normalized key (used as
-        # the refresh join key), `original_url` is the tokened playable working
-        # copy. Copying them as-is keeps refresh joins correct. Like streams, the
-        # tokened `original_url` is published (Decision 33) so favorites play.
         url = row["url"]
         orig = row["original_url"] or ""
-        # inherit source unless caller overrides
         sp = source_path if source_path is not None else (row["source_path"] or "")
         iu = is_url if is_url is not None else (row["is_url"] or 0)
         try:
@@ -363,7 +370,6 @@ class Database:
             name=name or "",
             url=url,
             original_url=orig,
-            group_title=group_title or "",
             source_path=sp,
             is_url=iu,
             extinf_raw=row["extinf_raw"] or "",
@@ -406,16 +412,17 @@ class Database:
 
     def favorite_delete(self, fid):
         self.writer.execute("DELETE FROM favorites WHERE id=?", (fid,))
+        self.writer.execute(
+            "DELETE FROM favorite_groups WHERE id NOT IN "
+            "(SELECT DISTINCT group_id FROM favorite_membership)")
         self.writer.commit()
 
-    def favorite_edit(self, fid, name=None, group_title=None, source_path=None,
+    def favorite_edit(self, fid, name=None, source_path=None,
                       is_url=None, is_enabled=None):
         """Edit mutable fields of a favorite. None values are left unchanged."""
         sets, params = [], []
         if name is not None:
             sets.append("name=?"); params.append(name or "")
-        if group_title is not None:
-            sets.append("group_title=?"); params.append(group_title or "")
         if source_path is not None:
             sets.append("source_path=?"); params.append(source_path or "")
         if is_url is not None:
@@ -490,6 +497,8 @@ class Database:
             (rid, str(error_type), str(message)[:2000], str(source)[:500]),
         )
         self.writer.commit()
+        _LOG.debug("run error logged run_id=%s type=%s source=%s",
+                   rid, error_type, source)
 
     def get_run_errors(self, run_id=None, limit=200):
         """Return recent run errors. If run_id is given, only that run's errors."""

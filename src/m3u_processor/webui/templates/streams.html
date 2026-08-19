@@ -17,56 +17,206 @@
   </select>
   <select id="health" onchange="loadStreams()">
     <option value="">any health</option>
-    <option value="healthy">⭐ healthy</option>
-    <option value="medium">⚠️ medium</option>
-    <option value="slow">🐢 slow</option>
-    <option value="unknown">? unmeasured</option>
+    <option value="healthy">healthy</option>
+    <option value="medium">medium</option>
+    <option value="slow">slow</option>
+    <option value="unknown">unmeasured</option>
   </select>
+  <input id="providerFilter" placeholder="provider" oninput="loadStreams()">
+  <select id="sortField" onchange="loadStreams()">
+    <option value="name">sort: name</option>
+    <option value="provider">sort: provider</option>
+    <option value="health_score">sort: health</option>
+    <option value="total_failures">sort: total fail</option>
+    <option value="consecutive_failures">sort: consec fail</option>
+    <option value="total_pass">sort: total pass</option>
+    <option value="last_checked">sort: last checked</option>
+    <option value="last_working">sort: last working</option>
+  </select>
+  <label><input type="checkbox" id="sortAsc" onchange="loadStreams()"> asc</label>
 </div>
+
+<div id="batch-box" class="box hidden" style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+  <span id="sel-count" style="color:#94a3b8; font-size:0.85rem;">0 selected</span>
+  <button class="btn" onclick="batchAddFavorite()">★ Add to Favorites</button>
+  <button class="btn" onclick="batchRemoveFavorite()">☆ Remove from Favorites</button>
+  <select id="batch-tier" style="padding:4px 8px; border-radius:4px; border:1px solid #475569; background:#1e293b; color:#e2e8f0;">
+    <option value="">blacklist tier...</option>
+    <option value="none">none</option>
+    <option value="short">short</option>
+    <option value="permanent">permanent</option>
+  </select>
+  <button class="btn" onclick="batchSetBlacklist()">Set Tier</button>
+</div>
+
 <div style="display:flex; gap:1rem; align-items:flex-start;">
   <table class="tbl" id="streams" style="flex:1;">
-    <thead><tr><th>Name</th><th>Provider</th><th>Tier</th><th>Health</th><th>Working</th><th>Checked</th><th>Last Working</th><th>Total Fail</th><th>Consec Fail</th><th>Total Pass</th><th>Consec Pass</th></tr></thead>
+    <thead><tr>
+      <th style="width:30px"><input type="checkbox" id="sel-all" onchange="selAll(this)"></th>
+      <th style="width:30px; text-align:center;">★</th>
+      <th class="sortable" data-col="name">Name</th>
+      <th class="sortable" data-col="provider">Provider</th>
+      <th class="sortable" data-col="tier">Tier</th>
+      <th class="sortable" data-col="health_score">Health</th>
+      <th class="sortable" data-col="working">Working</th>
+      <th class="sortable" data-col="last_checked">Checked</th>
+      <th class="sortable" data-col="last_working">Last Working</th>
+      <th class="sortable" data-col="total_failures">Total Fail</th>
+      <th class="sortable" data-col="consecutive_failures">Consec Fail</th>
+      <th class="sortable" data-col="total_pass">Total Pass</th>
+      <th class="sortable" data-col="consecutive_pass">Consec Pass</th>
+    </tr></thead>
     <tbody></tbody>
   </table>
   <aside id="detail" class="detail" style="width:340px;"></aside>
 </div>
+
+<div id="toast" style="position:fixed; bottom:20px; right:20px; padding:10px 18px; border-radius:6px; background:#16a34a; color:#fff; font-size:0.85rem; display:none; z-index:999;"></div>
+
 <script>
 const ICON={healthy:'⭐',medium:'⚠️',slow:'🐢',unknown:'?'};
+const COL_KEY={name:'name',provider:'provider_domain',tier:'blacklist_tier',
+  health_score:'health_score',working:'is_working',last_checked:'last_checked',
+  last_working:'last_working',total_failures:'total_failures',
+  consecutive_failures:'consecutive_failures',total_pass:'total_pass',
+  consecutive_pass:'consecutive_pass'};
+let _rows=[];
+
+function toast(msg, ms){
+  const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block';
+  setTimeout(()=>{t.style.display='none';}, ms||2000);
+}
+
+function fmtDate(s){
+  if(!s) return '';
+  try{
+    const d=new Date(s);
+    if(isNaN(d)) return s;
+    const now=Date.now(), diff=(now-d.getTime())/1000;
+    if(diff<60) return 'just now';
+    if(diff<3600) return Math.floor(diff/60)+'m ago';
+    if(diff<86400) return Math.floor(diff/3600)+'h ago';
+    if(diff<604800) return Math.floor(diff/86400)+'d ago';
+    return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})
+      +' '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  }catch(e){return s}
+}
+
 function loadStreams(){
   const q=document.getElementById('q').value;
   const tier=document.getElementById('tier').value;
   const working=document.getElementById('working').value;
   const health=document.getElementById('health').value;
-  const u=`/api/streams?q=${encodeURIComponent(q)}&tier=${tier}&working=${working}&health=${health}`;
+  const u=`/api/streams?q=${encodeURIComponent(q)}&tier=${tier}&working=${working}&health=${health}&limit=500`;
   fetch(u).then(r=>r.json()).then(rows=>{
-    const tb=document.querySelector('#streams tbody');
-    tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}" onclick="showDetail(${r.id})">
-      <td>${esc(r.name)}</td><td>${esc(r.provider_domain)}</td>
-      <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
-      <td>${ICON[r.health_tier]||'?'}${r.health_score!=null?(' '+Math.round(r.health_score)):''}</td>
-      <td>${r.is_working===1?'✔':(r.is_working===0?'✘':'?')}</td>
-      <td>${r.last_checked||''}</td>
-      <td>${r.last_working||''}</td>
-      <td class="${r.total_failures>0?'warn':''}">${r.total_failures||0}</td>
-      <td class="${r.consecutive_failures>0?'warn':''}">${r.consecutive_failures||0}</td>
-      <td class="${r.total_pass>0?'ok':''}">${r.total_pass||0}</td>
-      <td class="${r.consecutive_pass>0?'ok':''}">${r.consecutive_pass||0}</td></tr>`).join('');
+    _rows=rows;
+    render();
   });
 }
-function showDetail(id){
-  fetch(`/api/streams?q=`).then(r=>r.json()).then(rows=>{
-    const r=rows.find(x=>x.id===id); if(!r) return;
-    const d=document.getElementById('detail');
-    d.innerHTML=`<h3>${esc(r.name)}</h3>
-      <div class="kv"><span>Provider</span><b>${esc(r.provider_domain)}</b></div>
-      <div class="kv"><span>Tier</span><b>${r.blacklist_tier}</b></div>
-      <div class="kv"><span>Health</span><b>${ICON[r.health_tier]||'?'}</b></div>
-      <div class="kv"><span>Score</span><b>${r.health_score!=null?Math.round(r.health_score):'-'}</b></div>
-      <div class="urlbox"><code>${esc(r.original_url||r.url)}</code>
-        <button onclick="copyUrl(this)">copy</button></div>
-      <button class="btn danger" onclick="disableProvider('${esc(r.provider_domain)}')">disable provider</button>
-      <button class="btn" onclick="loadStreams()">close</button>`;
+
+function render(){
+  const pf=(document.getElementById('providerFilter').value||'').toLowerCase();
+  const sf=document.getElementById('sortField').value;
+  const asc=document.getElementById('sortAsc').checked;
+  const ck=COL_KEY[sf]||sf;
+  let data=_rows;
+  if(pf) data=data.filter(r=>(r.provider_domain||'').toLowerCase().includes(pf));
+  data.sort((a,b)=>{
+    let av=a[ck],bv=b[ck];
+    if(av==null) av=''; if(bv==null) bv='';
+    if(typeof av==='number' && typeof bv==='number') return asc?av-bv:bv-av;
+    av=String(av).toLowerCase(); bv=String(bv).toLowerCase();
+    return asc?av.localeCompare(bv):bv.localeCompare(av);
   });
+  const tb=document.querySelector('#streams tbody');
+  tb.innerHTML=data.map(r=>`<tr data-id="${r.id}">
+    <td><input type="checkbox" class="sel" data-id="${r.id}" data-url="${esc(r.url)}"></td>
+    <td style="text-align:center; cursor:pointer; font-size:1.2em;" onclick="toggleFav(${r.id},'${esc(r.url)}')" title="${r.is_favorite?'Remove from favorites':'Add to favorites'}">${r.is_favorite?'★':'☆'}</td>
+    <td onclick="showDetail(${r.id})">${esc(r.name)}</td>
+    <td><a href="/providers?search=${encodeURIComponent(r.provider_domain)}" style="color:#93c5fd;text-decoration:none;" title="View provider details">${esc(r.provider_domain)}</a></td>
+    <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
+    <td>${ICON[r.health_tier]||'?'}${r.health_score!=null?(' '+Math.round(r.health_score)):''}</td>
+    <td>${r.is_working===1?'✔':(r.is_working===0?'✘':'?')}</td>
+    <td title="${r.last_checked||''}">${fmtDate(r.last_checked)}</td>
+    <td title="${r.last_working||''}">${fmtDate(r.last_working)}</td>
+    <td class="${r.total_failures>0?'warn':''}">${r.total_failures||0}</td>
+    <td class="${r.consecutive_failures>0?'warn':''}">${r.consecutive_failures||0}</td>
+    <td class="${r.total_pass>0?'ok':''}">${r.total_pass||0}</td>
+    <td class="${r.consecutive_pass>0?'ok':''}">${r.consecutive_pass||0}</td></tr>`).join('');
+  refreshSelCount();
+}
+
+function selectedIds(){return [...document.querySelectorAll('.sel:checked')].map(c=>+c.dataset.id);}
+function selectedUrls(){return [...document.querySelectorAll('.sel:checked')].map(c=>c.dataset.url);}
+function refreshSelCount(){
+  const n=selectedIds().length;
+  document.getElementById('sel-count').textContent=n+' selected';
+  document.getElementById('batch-box').classList.toggle('hidden', n===0);
+}
+function selAll(el){document.querySelectorAll('.sel').forEach(c=>c.checked=el.checked);refreshSelCount();}
+document.addEventListener('change',e=>{if(e.target.classList.contains('sel'))refreshSelCount();});
+
+function toggleFav(streamId, url){
+  fetch('/api/favorites/toggle',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({url})}).then(r=>r.json()).then(d=>{
+    if(d.ok){
+      toast(d.action==='added'?'★ Added to favorites':'☆ Removed from favorites');
+      loadStreams();
+    }
+  });
+}
+
+function batchAddFavorite(){
+  const urls=selectedUrls(); if(!urls.length) return;
+  fetch('/api/favorites/batch-add',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({urls})}).then(r=>r.json()).then(d=>{
+    toast(d.ok?`★ ${d.added} added to favorites`:('error: '+(d.error||'')));
+    loadStreams();
+  });
+}
+
+function batchRemoveFavorite(){
+  const ids=selectedIds(); if(!ids.length) return;
+  fetch('/api/favorites/batch-remove',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ids})}).then(r=>r.json()).then(d=>{
+    toast(d.ok?`☆ ${d.removed} removed from favorites`:('error: '+(d.error||'')));
+    loadStreams();
+  });
+}
+
+function batchSetBlacklist(){
+  const ids=selectedIds();
+  const tier=document.getElementById('batch-tier').value;
+  if(!ids.length) return alert('select streams first');
+  if(!tier) return alert('select a tier');
+  fetch('/api/streams/batch-blacklist',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ids,tier})}).then(r=>r.json()).then(d=>{
+    toast(d.ok?`Updated ${d.updated} streams to ${tier}`:('error: '+(d.error||'')));
+    loadStreams();
+  });
+}
+
+function showDetail(id){
+  const r=_rows.find(x=>x.id===id); if(!r) return;
+  const d=document.getElementById('detail');
+  d.innerHTML=`<h3>${esc(r.name)}</h3>
+    <div class="kv"><span>Provider</span><b><a href="/providers?search=${encodeURIComponent(r.provider_domain)}" style="color:#93c5fd;text-decoration:none;">${esc(r.provider_domain)}</a></b></div>
+    <div class="kv"><span>Tier</span><b>${r.blacklist_tier}</b></div>
+    <div class="kv"><span>Health</span><b>${ICON[r.health_tier]||'?'} ${r.health_score!=null?Math.round(r.health_score):'-'}</b></div>
+    <div class="kv"><span>Working</span><b>${r.is_working===1?'Yes':(r.is_working===0?'No':'Unknown')}</b></div>
+    <div class="kv"><span>Checked</span><b>${fmtDate(r.last_checked)}</b></div>
+    <div class="kv"><span>Last Working</span><b>${fmtDate(r.last_working)}</b></div>
+    <div class="kv"><span>Total Fail</span><b>${r.total_failures||0}</b></div>
+    <div class="kv"><span>Consec Fail</span><b>${r.consecutive_failures||0}</b></div>
+    <div class="kv"><span>Total Pass</span><b>${r.total_pass||0}</b></div>
+    <div class="kv"><span>Consec Pass</span><b>${r.consecutive_pass||0}</b></div>
+    <div class="urlbox"><code>${esc(r.original_url||r.url)}</code>
+      <button onclick="copyUrl(this)">copy</button></div>
+    <div style="display:flex; gap:6px; margin-top:8px;">
+      <button class="btn" onclick="toggleFav(${r.id},'${esc(r.url)}');showDetail(${r.id})">${r.is_favorite?'☆ Remove favorite':'★ Add favorite'}</button>
+      <button class="btn danger" onclick="disableProvider('${esc(r.provider_domain)}')">disable provider</button>
+    </div>
+    <button class="btn" style="margin-top:8px;" onclick="document.getElementById('detail').innerHTML=''">close</button>`;
 }
 function copyUrl(btn){
   const url=btn.parentElement.querySelector('code').textContent;
@@ -75,13 +225,40 @@ function copyUrl(btn){
 function disableProvider(domain){
   if(!confirm('Disable provider '+domain+'?')) return;
   fetch('/api/provider/disable',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({domain,reason:'web'})}).then(()=>{alert('disabled '+domain);loadStreams();});
+    body:JSON.stringify({domain,reason:'web'})}).then(()=>{toast('disabled '+domain);loadStreams();});
 }
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
-// honor ?health= / ?working= deep links
+
+// sortable headers
+document.querySelectorAll('.sortable').forEach(th=>{
+  th.style.cursor='pointer';
+  th.addEventListener('click',()=>{
+    const col=th.dataset.col;
+    const cur=document.getElementById('sortField').value;
+    const curCk=COL_KEY[cur]||cur;
+    const asc=document.getElementById('sortAsc');
+    if(curCk===col){ asc.checked=!asc.checked; }
+    else{
+      const sel=document.getElementById('sortField');
+      for(const opt of sel.options){ if(opt.value===col){ sel.value=col; break; } }
+      asc.checked=true;
+    }
+    loadStreams();
+  });
+});
+
+// honor deep links
 const p=new URLSearchParams(location.search);
 if(p.get('health')) document.getElementById('health').value=p.get('health');
 if(p.get('working')) document.getElementById('working').value=p.get('working');
+if(p.get('tier')) document.getElementById('tier').value=p.get('tier');
+if(p.get('provider')) document.getElementById('providerFilter').value=p.get('provider');
 loadStreams();
 </script>
+<style>
+.sortable{position:relative;padding-right:16px !important}
+.sortable::after{content:'↕';position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  font-size:10px;opacity:.4}
+.sort-active::after{opacity:1;color:var(--accent)}
+</style>
 {% endblock %}

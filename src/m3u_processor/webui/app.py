@@ -489,24 +489,29 @@ def create_app(cfg):
             wheres = ["1=1"]
             params = []
             if tier:
-                wheres.append("blacklist_tier=?")
+                wheres.append("s.blacklist_tier=?")
                 params.append(tier)
             if working == "1":
-                wheres.append("(is_working=1 OR is_working IS NULL)")
+                wheres.append("(s.is_working=1 OR s.is_working IS NULL)")
             elif working == "0":
-                wheres.append("is_working=0")
+                wheres.append("s.is_working=0")
             if health:
-                wheres.append("health_tier=?")
+                wheres.append("s.health_tier=?")
                 params.append(health)
             if q:
-                wheres.append("(name LIKE ? OR url LIKE ?)")
+                wheres.append("(s.name LIKE ? OR s.url LIKE ?)")
                 params.extend([f"%{q}%", f"%{q}%"])
-            sql = ("SELECT id, name, url, original_url, provider_domain, blacklist_tier, "
-                   "is_working, health_tier, health_score, last_checked, "
-                   "last_working, total_failures, consecutive_failures, "
-                   "consecutive_pass, total_pass FROM streams WHERE "
+            sql = ("SELECT s.id, s.name, s.url, s.original_url, s.provider_domain, "
+                   "s.blacklist_tier, s.is_working, s.health_tier, s.health_score, "
+                   "s.last_checked, s.last_working, s.total_failures, "
+                   "s.consecutive_failures, s.consecutive_pass, s.total_pass, "
+                   "COALESCE(f.fid, 0) AS is_favorite, "
+                   "COALESCE(f.fid, 0) AS favorite_id "
+                   "FROM streams s "
+                   "LEFT JOIN (SELECT id AS fid, url FROM favorites) f "
+                   "ON f.url = s.url WHERE "
                    + " AND ".join(wheres) +
-                   " ORDER BY id LIMIT ? OFFSET ?")
+                   " ORDER BY s.id LIMIT ? OFFSET ?")
             params.extend([limit, offset])
             rows = db.query(sql, params)
         finally:
@@ -514,10 +519,72 @@ def create_app(cfg):
         return [dict(r) for r in rows]
 
     @app.get("/api/providers")
-    def api_providers():
+    def api_providers(
+        search: str = "",
+        state: str = "",
+        sort: str = "streams-desc",
+        page: int = 1,
+        per_page: int = 50,
+    ):
         db = _get_db(cfg)
         try:
-            rows = db.query("""
+            params = []
+            where = ""
+            if search:
+                where = " WHERE p.domain LIKE ?"
+                params.append(f"%{search}%")
+            if state == "enabled":
+                where += (" AND " if where else " WHERE ") + " p.enabled = 1"
+            elif state == "disabled":
+                where += (" AND " if where else " WHERE ") + " p.enabled = 0"
+
+            sort_map = {
+                "streams-desc": "total_streams DESC, p.domain",
+                "streams-asc": "total_streams ASC, p.domain",
+                "working-desc": "working DESC, p.domain",
+                "name-asc": "p.domain ASC",
+                "name-desc": "p.domain DESC",
+            }
+            order = sort_map.get(sort, "total_streams DESC, p.domain")
+
+            totals_row = db.query("""
+                SELECT
+                    COUNT(DISTINCT p.domain) AS total_providers,
+                    COALESCE(SUM(sub.total), 0) AS total_streams,
+                    COALESCE(SUM(sub.working), 0) AS working,
+                    COALESCE(SUM(sub.failed), 0) AS failed,
+                    COALESCE(SUM(sub.unchecked), 0) AS unchecked,
+                    COALESCE(SUM(sub.blacklist_short), 0) AS blacklist_short,
+                    COALESCE(SUM(sub.blacklist_permanent), 0) AS blacklist_permanent
+                FROM providers p
+                LEFT JOIN (
+                    SELECT
+                        provider_domain,
+                        COUNT(*) AS total,
+                        SUM(CASE WHEN is_working = 1 THEN 1 ELSE 0 END) AS working,
+                        SUM(CASE WHEN is_working = 0 THEN 1 ELSE 0 END) AS failed,
+                        SUM(CASE WHEN is_working IS NULL THEN 1 ELSE 0 END) AS unchecked,
+                        SUM(CASE WHEN blacklist_tier = 'short' THEN 1 ELSE 0 END) AS blacklist_short,
+                        SUM(CASE WHEN blacklist_tier = 'permanent' THEN 1 ELSE 0 END) AS blacklist_permanent
+                    FROM streams GROUP BY provider_domain
+                ) sub ON sub.provider_domain = p.domain
+            """)[0]
+            totals = dict(totals_row)
+
+            offset = max(0, (page - 1) * per_page)
+
+            count_sql = f"""
+                SELECT COUNT(*) AS cnt
+                FROM providers p
+                LEFT JOIN (
+                    SELECT provider_domain, COUNT(*) AS total
+                    FROM streams GROUP BY provider_domain
+                ) s ON s.provider_domain = p.domain
+                {where}
+            """
+            total = db.query(count_sql, params)[0]["cnt"]
+
+            rows = db.query(f"""
                 SELECT
                     p.domain,
                     p.enabled,
@@ -548,11 +615,20 @@ def create_app(cfg):
                     FROM streams
                     GROUP BY provider_domain
                 ) s ON s.provider_domain = p.domain
-                ORDER BY total_streams DESC, p.domain
-            """)
+                {where}
+                ORDER BY {order}
+                LIMIT ? OFFSET ?
+            """, params + [per_page, offset])
         finally:
             db.close()
-        return [dict(r) for r in rows]
+        return {
+            "providers": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": (total + per_page - 1) // per_page,
+            "totals": totals,
+        }
 
     @app.post("/api/provider/disable")
     async def api_disable(req: Request):
@@ -714,7 +790,6 @@ def create_app(cfg):
                 name=body.get("name", ""),
                 url=body["url"],
                 original_url=body.get("original_url", ""),
-                group_title=body.get("group", ""),
                 source_path=body.get("source_path", ""),
                 is_url=bool(body.get("is_url", False)),
                 is_enabled=bool(body.get("is_enabled", True)),
@@ -736,7 +811,6 @@ def create_app(cfg):
             fid = db.favorite_add_existing(
                 stream_url=body["url"],
                 name=body.get("name", ""),
-                group_title=body.get("group", ""),
             )
             if fid and body.get("group"):
                 db.favorite_set_group([fid], body["group"])
@@ -755,7 +829,6 @@ def create_app(cfg):
             db.favorite_edit(
                 fid,
                 name=body.get("name"),
-                group_title=body.get("group_title"),
                 source_path=body.get("source_path"),
                 is_url=body.get("is_url"),
                 is_enabled=body.get("is_enabled"),
@@ -832,9 +905,9 @@ def create_app(cfg):
             checked = 0
             for r in rows:
                 # Validate the PLAYABLE url (may carry a token) — that is what
-                # must actually be reachable. Validation is internal (no publish),
-                # so using the tokened url is correct here.
-                url = r["url"] or r["original_url"]
+                # must actually be reachable. Prefer original_url (tokened) since
+                # tokenless url may not be directly reachable.
+                url = r["original_url"] or r["url"]
                 res = validator.validate_one(
                     type("S", (), {"url": url, "original_url": url,
                                   "attributes": {}})())
@@ -845,10 +918,87 @@ def create_app(cfg):
                     continue
                 db.favorite_record_result(r["id"], res.ok)
                 checked += 1
-            db.close()
             return {"ok": True, "checked": checked}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/toggle")
+    async def api_favorites_toggle(req: Request):
+        body = await _json_body(req)
+        db = _get_db(cfg)
+        try:
+            url = body.get("url", "")
+            if not url:
+                return {"ok": False, "error": "url required"}
+            existing = db.query(
+                "SELECT id FROM favorites WHERE url=?", (url,))
+            if existing:
+                db.favorite_delete(existing[0]["id"])
+                _LOG.info("web favorite toggled OFF url=%s", url)
+                return {"ok": True, "action": "removed"}
+            else:
+                fid = db.favorite_add_existing(stream_url=url)
+                if fid:
+                    _LOG.info("web favorite toggled ON url=%s id=%s", url, fid)
+                    return {"ok": True, "action": "added", "id": fid}
+                return {"ok": False, "error": "stream not found"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/batch-add")
+    async def api_favorites_batch_add(req: Request):
+        body = await _json_body(req)
+        db = _get_db(cfg)
+        try:
+            urls = body.get("urls", [])
+            added = 0
+            for url in urls:
+                existing = db.query("SELECT id FROM favorites WHERE url=?", (url,))
+                if not existing:
+                    fid = db.favorite_add_existing(stream_url=url)
+                    if fid:
+                        added += 1
+            return {"ok": True, "added": added}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            db.close()
+
+    @app.post("/api/favorites/batch-remove")
+    async def api_favorites_batch_remove(req: Request):
+        body = await _json_body(req)
+        db = _get_db(cfg)
+        try:
+            ids = body.get("ids", [])
+            for fid in ids:
+                db.favorite_delete(fid)
+            return {"ok": True, "removed": len(ids)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            db.close()
+
+    @app.post("/api/streams/batch-blacklist")
+    async def api_streams_batch_blacklist(req: Request):
+        body = await _json_body(req)
+        db = _get_db(cfg)
+        try:
+            ids = body.get("ids", [])
+            tier = body.get("tier", "none")
+            for sid in ids:
+                db.execute(
+                    "UPDATE streams SET blacklist_tier=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (tier, sid))
+            db.commit()
+            return {"ok": True, "updated": len(ids)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            db.close()
 
     @app.post("/api/generate")
     async def api_generate(req: Request):
