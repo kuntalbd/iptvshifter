@@ -16,7 +16,9 @@ import json
 import signal
 import sys
 import os
+import fcntl
 from datetime import datetime, timezone
+from time import time as _time
 
 from .parser import PlaylistParser, merge_into_db
 from .validator import StreamValidator
@@ -27,6 +29,75 @@ from .utils import ROTATING_TOKEN_PARAMS
 from .logging_utils import get_logger as _get_logger
 
 _LOG = _get_logger("m3u.orchestrator")
+
+
+class RunLock:
+    """Advisory file lock that serializes Orchestrator.run() calls.
+
+    Unlike the PID-based check, this works for both CLI and web-spawned runs.
+    The lock file is .run.lock in the database directory.
+    """
+    def __init__(self, db_path: str, timeout: int = 10):
+        lock_dir = os.path.dirname(db_path) or "."
+        self.path = os.path.join(lock_dir, ".run.lock")
+        self.timeout = timeout
+        self._fd = None
+
+    def acquire(self) -> bool:
+        """Try to acquire the lock. Returns True if acquired, False if timed out."""
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self._fd = open(self.path, "a+")  # append+read: create if missing, don't truncate
+        self._fd.seek(0)
+        deadline = _time() + self.timeout
+        while True:
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._fd.seek(0)
+                self._fd.truncate()
+                self._fd.write(f"{os.getpid()}\n")
+                self._fd.flush()
+                return True
+            except BlockingIOError:
+                if _time() >= deadline:
+                    self._fd.close()
+                    self._fd = None
+                    return False
+                # Check if lock holder is still alive — stale lock => force break
+                try:
+                    self._fd.seek(0)
+                    holder_pid = int(self._fd.read().strip())
+                    os.kill(holder_pid, 0)  # probe
+                except (ValueError, FileNotFoundError, OSError):
+                    try:
+                        fcntl.flock(self._fd, fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+                    self._fd.close()
+                    self._fd = None
+                    try:
+                        os.unlink(self.path)
+                    except OSError:
+                        pass
+                    self._fd = open(self.path, "a+")
+                    continue
+                import time as _sleep
+                _sleep.sleep(1)
+
+    def release(self):
+        if self._fd is not None:
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                self._fd.close()
+            except Exception:
+                pass
+            self._fd = None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *a):
+        self.release()
 
 
 def _is_tokened(url: str) -> bool:
@@ -167,7 +238,7 @@ class Orchestrator:
         rows = self.db.query(
             "SELECT id, url, original_url, provider_domain, source_type, source_path, "
             "attributes, enabled, total_failures, consecutive_failures, last_working, "
-            "consecutive_pass, total_pass, "
+            "consecutive_pass, total_pass, total_successes, "
             "blacklist_tier, blacklisted_at, blacklist_reason, is_working "
             f"FROM streams WHERE {where}"
         )
@@ -204,45 +275,33 @@ class Orchestrator:
                     "WHERE run_id=?",
                     (rid,),
                 )
+                _LOG.warning("reaped zombie run run_id=%s (pid dead)", rid)
             self.db.commit()
         except Exception:
             pass
         self.stats["mode"] = mode
         self.mode = mode
 
-        # ---- single-run guard: only ONE active run at a time ----
-        # If another run's process is still alive (live PID), THIS initiation is
-        # discarded: record a 'discarded' run entry (so the UI can show the
-        # reason) and return without doing any work. The user can stop the
-        # active run from the Web UI; a new run can then be started.
-        # Runs BEFORE inserting our own row so the discarded record can safely
-        # reuse self.run_id (no unique collision with our own 'running' row).
-        try:
-            live = self.db.query(
-                "SELECT run_id, mode FROM runs WHERE status='running' AND run_id<>?",
-                (self.run_id,),
+        # ---- single-run guard: file-based lock (works for CLI + web runs) ----
+        # The PID-based check is unreliable for web-spawned runs (no real PID).
+        # A file lock (.run.lock) serializes all concurrent runs.
+        run_lock = RunLock(self.db.path)
+        if not run_lock.acquire():
+            # Could not acquire lock — another run is active
+            self.db.execute(
+                "INSERT INTO runs(run_id, mode, started_at, status, stats_json) "
+                "VALUES(?,?,?,?,?)",
+                (self.run_id, mode, datetime.now(timezone.utc).isoformat(),
+                 "discarded",
+                 json.dumps({"reason": "another run already active (file lock)"})),
             )
-            for (rid, rmode) in live:
-                pid = _pid_from_run_id(rid)
-                if pid and _process_alive(pid):
-                    # record this discarded attempt, then bail
-                    self.db.execute(
-                        "INSERT INTO runs(run_id, mode, started_at, status, stats_json) "
-                        "VALUES(?,?,?,?,?)",
-                        (self.run_id, mode, datetime.now(timezone.utc).isoformat(),
-                         "discarded",
-                         json.dumps({"reason": f"another run already active ({rmode})",
-                                     "discarded_by": rid})),
-                    )
-                    self.db.commit()
-                    self.stats["discarded"] = True
-                    self.stats["discard_reason"] = f"another run already active ({rmode})"
-                    return self.stats
-        except Exception:
-            pass
+            self.db.commit()
+            self.stats["discarded"] = True
+            self.stats["discard_reason"] = "another run already active (file lock)"
+            _LOG.warning("run discarded run_id=%s mode=%s (file lock held)", self.run_id, mode)
+            return self.stats
 
-        # record THIS run as the active one (after the guard, so a discarded
-        # attempt does not leave a stray 'running' row behind).
+        # Lock acquired — record THIS run as the active one.
         self.db.execute(
             "INSERT INTO runs(run_id, mode, started_at, status) VALUES(?,?,?,?)",
             (self.run_id, mode, datetime.now(timezone.utc).isoformat(), "running"),
@@ -252,7 +311,7 @@ class Orchestrator:
         _LOG.info("run start run_id=%s mode=%s", self.run_id, mode)
 
         rows = self._eligible_rows(mode)
-        # refresh mode only targets expiring (tokened) URLs. Pre-filter in SQL
+            # refresh mode only targets expiring (tokened) URLs. Pre-filter in SQL
         # via LIKE on the rotating-token params (avoids dragging 16k non-tokened
         # rows just to discard them in Python).
         if mode == "refresh":
@@ -261,7 +320,7 @@ class Orchestrator:
             q = (
                 "SELECT id, url, original_url, provider_domain, source_type, source_path, "
                 "attributes, enabled, total_failures, consecutive_failures, last_working, "
-                "consecutive_pass, total_pass, "
+                "consecutive_pass, total_pass, total_successes, "
                 "blacklist_tier, blacklisted_at, blacklist_reason, is_working "
                 f"FROM streams WHERE {MODE_ELIGIBILITY[mode]} AND ({like})"
             )
@@ -307,6 +366,9 @@ class Orchestrator:
                 # Part B: refresh favorite tokens, then export favorite.*.m3u
                 self.stats["favorite_token_refreshed"] = self._refresh_favorite_tokens()
                 self._export_favorites_to_out()
+                _LOG.info("refresh done run_id=%s token_refreshed=%s favorites=%s",
+                          self.run_id, self.stats["token_refreshed"],
+                          self.stats.get("favorite_token_refreshed", 0))
                 # record last refresh time (audit; scheduling authority = systemd timer)
                 self.db.execute(
                     "INSERT OR REPLACE INTO config(key, value) VALUES('last_refresh_at', ?)",
@@ -320,8 +382,10 @@ class Orchestrator:
                 )
                 self.db.commit()
                 self.stats["error"] = f"{type(e).__name__}: {e}"
+                run_lock.release()
                 raise
             self._finalize()
+            run_lock.release()
             return self.stats
 
         # ---- Solution A: 2-phase funnel (parallel cheap HEAD -> deep A+B) ----
@@ -373,8 +437,10 @@ class Orchestrator:
             )
             self.db.commit()
             self.stats["error"] = f"{type(e).__name__}: {e}"
+            run_lock.release()
             raise
         self._finalize()
+        run_lock.release()
         return self.stats
 
     def _persist_progress(self, done: int, total: int):
@@ -407,6 +473,7 @@ class Orchestrator:
             consecutive_failures=row["consecutive_failures"] or 0,
             total_pass=row["total_pass"] or 0,
             consecutive_pass=row["consecutive_pass"] or 0,
+            total_successes=row["total_successes"] or 0,
             last_working=row["last_working"],
             blacklist_tier=row["blacklist_tier"] or "none",
             blacklisted_at=row["blacklisted_at"],
@@ -433,6 +500,10 @@ class Orchestrator:
         transition = apply_result(stream, res.ok, res.suspected_expired,
                                   self.config, run_id=self.run_id)
         self._count_transition(transition)
+        if transition.get("event"):
+            _LOG.debug("result stream_id=%s ok=%s event=%s old=%s new=%s",
+                       stream.id, res.ok, transition.get("event"),
+                       transition.get("old_tier"), transition.get("new_tier"))
         # persist (health is only meaningful when we actually measured it)
         health_score = res.health_score if res.ok else None
         health_tier = res.health_tier if res.ok else None
@@ -667,6 +738,16 @@ class Orchestrator:
              duration, self.run_id),
         )
         self.db.commit()
+        # Purge stale streams (never-validated / not-checked for N days) before
+        # regenerating output so dead rows don't linger in the DB forever. Gated
+        # on `blacklist.purge_unchecked_days` (<=0 = operator opt-out). Best
+        # effort: a purge failure must not break the run or its publish.
+        try:
+            from .blacklist import purge_old
+            self.stats["purged"] = purge_old(self.db, self.config, run_id=self.run_id)
+        except Exception as e:  # noqa: BLE001
+            self.stats["purge_error"] = f"purge failed: {e}"
+            _LOG.warning("purge_old failed run_id=%s err=%s", self.run_id, e)
         # Regenerate output playlists from the (now-updated) DB BEFORE publishing,
         # so the pushed playlist reflects this run's results. Output is built from
         # ALL working streams (is_working=1 OR unverified NULL) regardless of the
@@ -677,6 +758,7 @@ class Orchestrator:
             self._regenerate_outputs()
         except Exception as e:  # noqa: BLE001
             self.stats["generate_error"] = f"output regeneration failed: {e}"
+            _LOG.warning("output regeneration failed run_id=%s err=%s", self.run_id, e)
         # Auto-publish finished outputs to the public repo after a run. The output
         # dir is copied as-is (publish does NOT regenerate; regeneration already
         # happened above). Best-effort: never let a publish failure break the
@@ -687,8 +769,11 @@ class Orchestrator:
             if not pub_result.get("published") and pub_result.get("error"):
                 # surface as a warning in stats for operator visibility
                 self.stats["publish_error"] = pub_result["error"]
+                _LOG.warning("publish failed run_id=%s error=%s",
+                             self.run_id, pub_result["error"])
         except Exception as e:  # noqa: BLE001
             self.stats["publish_error"] = f"publish hook crashed: {e}"
+            _LOG.exception("publish hook crashed run_id=%s", self.run_id)
 
         _LOG.info("run finished run_id=%s mode=%s status=%s checked=%s working=%s failed=%s duration=%s",
                   self.run_id, getattr(self, "mode", "?"),
@@ -716,6 +801,7 @@ class Orchestrator:
             quality_cfg=self.config.get("quality"),
         )
         self.stats["generated_files"] = list(results.keys())
+        _LOG.info("regenerated outputs run_id=%s files=%s", self.run_id, list(results.keys()))
 
     def report(self) -> dict:
         return self.stats
