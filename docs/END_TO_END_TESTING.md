@@ -94,7 +94,7 @@ requirement, it is flagged `[CODE-DRIFT]`.
   - Run: `POST /api/run` (now **ingests** before validate — TC-2 fix), `GET /api/run-status`, `POST /api/run/stop`, `GET /api/live` (SSE), `GET /api/run-errors`.
   - Streams: `GET /api/streams`, `GET /api/health-stats`, `POST /api/provider/disable|enable`.
   - Providers: `GET /api/providers`.
-  - Favorites: `GET /api/favorites`, `GET /api/favorite-groups`, `POST /api/favorites/add|add-existing|edit|delete|set-enabled|set-group|validate-now`.
+  - Favorites: `GET /api/favorites`, `GET /api/favorite-groups`, `POST /api/favorites/add|add-existing|edit|delete|set-enabled|set-group|validate-now|toggle|batch-add|batch-remove`, `POST /api/streams/batch-blacklist`.
   - Scheduler: `GET/POST/DELETE /api/scheduler`.
   - Runs: `GET /api/runs`, `GET /api/events`, `POST /api/generate`.
 - **`[CODE-DRIFT]`** requirement §10.2 listed routes `/streams/<id>`, `/domains`, `/api/stats` — current code uses `/providers`, `/api/streams`, no `/api/stats`. Update requirement if UI is canonical.

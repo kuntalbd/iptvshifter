@@ -505,7 +505,7 @@ def create_app(cfg):
                    "s.blacklist_tier, s.is_working, s.health_tier, s.health_score, "
                    "s.last_checked, s.last_working, s.total_failures, "
                    "s.consecutive_failures, s.consecutive_pass, s.total_pass, "
-                   "COALESCE(f.fid, 0) AS is_favorite, "
+                   "CASE WHEN f.fid IS NULL THEN 0 ELSE 1 END AS is_favorite, "
                    "COALESCE(f.fid, 0) AS favorite_id "
                    "FROM streams s "
                    "LEFT JOIN (SELECT id AS fid, url FROM favorites) f "
@@ -568,7 +568,8 @@ def create_app(cfg):
                         SUM(CASE WHEN blacklist_tier = 'permanent' THEN 1 ELSE 0 END) AS blacklist_permanent
                     FROM streams GROUP BY provider_domain
                 ) sub ON sub.provider_domain = p.domain
-            """)[0]
+                {where}
+            """.format(where=where), params)[0]
             totals = dict(totals_row)
 
             offset = max(0, (page - 1) * per_page)
@@ -989,6 +990,8 @@ def create_app(cfg):
         try:
             ids = body.get("ids", [])
             tier = body.get("tier", "none")
+            if tier not in ("none", "short", "permanent"):
+                return {"ok": False, "error": f"invalid tier: {tier}"}
             for sid in ids:
                 db.execute(
                     "UPDATE streams SET blacklist_tier=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",

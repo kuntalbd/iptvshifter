@@ -74,6 +74,7 @@ const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&g
 
 let currentPage = 1;
 let debounceTimer = null;
+let _providers = [];
 
 function debounce(fn, ms) {
   clearTimeout(debounceTimer);
@@ -89,6 +90,7 @@ function loadProviders(page) {
 
   fetch('/api/providers?' + params).then(r => r.json()).then(data => {
     const rows = data.providers;
+    _providers = rows;
     const t = data.totals || {};
     document.getElementById('summary').innerHTML = `
       <span class="summary-item"><strong>${(t.total_providers||0).toLocaleString()}</strong> providers</span>
@@ -124,8 +126,8 @@ function loadProviders(page) {
         <td class="${r.enabled ? 'state-enabled' : 'state-disabled'}">${r.enabled ? 'ENABLED' : 'DISABLED'}</td>
         <td style="color:#94a3b8; font-size:0.85rem;">${esc(r.disabled_reason || '')}</td>
         <td>${r.enabled
-          ? `<button class="action-btn btn-disable" onclick="disable('${esc(r.domain)}')">Disable</button>`
-          : `<button class="action-btn btn-enable" onclick="enable('${esc(r.domain)}')">Enable</button>`}</td>
+          ? `<button class="action-btn btn-disable" data-idx="${rows.indexOf(r)}" onclick="disable(this)">Disable</button>`
+          : `<button class="action-btn btn-enable" data-idx="${rows.indexOf(r)}" onclick="enable(this)">Enable</button>`}</td>
       </tr>`;
     }).join('');
 
@@ -151,11 +153,13 @@ function renderPagination(totalPages, current) {
   el.innerHTML = html;
 }
 
-function disable(d) {
+function disable(btn) {
+  const d = _providers[+btn.dataset.idx].domain;
   fetch('/api/provider/disable', {method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({domain:d, reason:'web'})}).then(() => loadProviders(currentPage));
 }
-function enable(d) {
+function enable(btn) {
+  const d = _providers[+btn.dataset.idx].domain;
   fetch('/api/provider/enable', {method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({domain:d})}).then(() => loadProviders(currentPage));
 }

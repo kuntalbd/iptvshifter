@@ -377,3 +377,110 @@ def test_streams_api_shows_is_favorite(tmp_path):
     # now favorited
     s = c.get("/api/streams?q=FavStream").json()
     assert s[0]["is_favorite"] == 1
+
+
+def test_favorite_write_preserves_attributes(tmp_path):
+    """BUG#1 regression: write_favorites must carry tvg attrs + headers from
+    sqlite3.Row rows (previously isinstance(r, dict) check silently dropped all)."""
+    dbp = os.path.join(str(tmp_path), "m3u.db")
+    outd = os.path.join(str(tmp_path), "out")
+    cfgd = dict(cfg_mod.DEFAULTS)
+    cfgd["database"]["path"] = dbp
+    cfgd["output"]["dir"] = outd
+    cfgd["publish"] = {"enabled": False}
+    cpath = os.path.join(str(tmp_path), "config.yaml")
+    yaml.safe_dump(cfgd, open(cpath, "w"))
+    cfg = cfg_mod.load_config(config_path=cpath)
+    db = Database(dbp); db.init_db(backup=False)
+    db.favorite_add(name="CNN", url="http://x/cnn.m3u",
+                    original_url="http://x/cnn.m3u?token=SECRET",
+                    attributes={"tvg-id": "cnn", "tvg-logo": "http://l/cnn.png",
+                                "vlc_options": {"http-user-agent": "UA"}})
+    from m3u_processor.orchestrator import Orchestrator
+    orch = Orchestrator(db, cfg)
+    orch.run(mode="refresh")
+    content = open(os.path.join(outd, "favorite.m3u")).read()
+    assert 'tvg-id="cnn"' in content
+    assert 'tvg-logo="http://l/cnn.png"' in content
+    assert "http-user-agent=UA" in content
+    assert "token=SECRET" in content
+    db.close()
+
+
+def test_favorite_add_dedupes_url(tmp_path):
+    """BUG#3 regression: favorite_add must not create duplicate rows for a url."""
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    id1 = db.favorite_add("a", "http://x/u.m3u")
+    id2 = db.favorite_add("b", "http://x/u.m3u")
+    assert id1 == id2
+    n = db.query("SELECT COUNT(*) FROM favorites WHERE url=?", ("http://x/u.m3u",))[0][0]
+    assert n == 1
+    db.close()
+
+
+def test_streams_api_no_cartesian_duplicates(tmp_path):
+    """BUG#3 regression: with UNIQUE url + dedupe, /api/streams returns 1 row
+    per stream even when a favorite exists."""
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    db.execute(
+        "INSERT INTO streams(name, url, original_url, provider_domain, source_type) "
+        "VALUES(?,?,?,?,?)",
+        ("S", "http://e/s.m3u", "http://e/s.m3u?tok=1", "e.com", "remote"))
+    db.commit()
+    db.favorite_add("f1", "http://e/s.m3u")
+    db.close()
+    c = TestClient(create_app(cfg))
+    rows = c.get("/api/streams?q=s.m3u").json()
+    assert len(rows) == 1
+    assert rows[0]["is_favorite"] == 1
+
+
+def test_favorite_set_group_empty_removes_membership(tmp_path):
+    """BUG#4 regression: clearing a favorite's group must NOT create a '' group."""
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    fid = db.favorite_add("t", "http://x/t.m3u")
+    db.favorite_set_group([fid], "my-group")
+    db.favorite_set_group([fid], "")
+    groups = db.favorite_groups()
+    assert not any(g["name"] == "" for g in groups)
+    assert db.query("SELECT COUNT(*) FROM favorite_membership WHERE favorite_id=?", (fid,))[0][0] == 0
+    db.close()
+
+
+def test_batch_blacklist_rejects_invalid_tier(tmp_path):
+    """Tier whitelist: batch-blacklist must reject unknown tiers."""
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    db.execute(
+        "INSERT INTO streams(name, url, original_url, provider_domain, source_type) "
+        "VALUES(?,?,?,?,?)",
+        ("S", "http://e/s.m3u", "http://e/s.m3u", "e.com", "remote"))
+    db.commit(); db.close()
+    c = TestClient(create_app(cfg))
+    r = c.post("/api/streams/batch-blacklist", json={"ids": [1], "tier": "super"})
+    assert r.json()["ok"] is False
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    assert db.query("SELECT blacklist_tier FROM streams WHERE id=1")[0][0] == "none"
+    db.close()
+
+
+def test_providers_totals_respect_filters(tmp_path):
+    """BUG#6 regression: /api/providers totals must reflect search/state filters."""
+    from m3u_processor.providers import ensure_provider
+    cfg = _cfg(str(tmp_path))
+    db = Database(cfg.get("database.path")); db.init_db(backup=False)
+    for i in range(3):
+        db.execute(
+            "INSERT INTO streams(name, url, original_url, provider_domain, source_type) "
+            "VALUES(?,?,?,?,?)",
+            (f"S{i}", f"http://d{i}.com/s.m3u", f"http://d{i}.com/s.m3u", f"d{i}.com", "remote"))
+        ensure_provider(db, f"d{i}.com", True)
+    db.commit(); db.close()
+    c = TestClient(create_app(cfg))
+    all_data = c.get("/api/providers").json()
+    assert all_data["totals"]["total_providers"] == 3
+    filtered = c.get("/api/providers?search=d0").json()
+    assert filtered["totals"]["total_providers"] == 1, filtered["totals"]

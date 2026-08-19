@@ -188,7 +188,7 @@ def write_favorites(rows, out_dir: str, formats=("vlc", "kodi", "tivimate")):
         if not play_url:
             continue
         attrs = {}
-        raw_attrs = r["attributes"] if isinstance(r, dict) else None
+        raw_attrs = r["attributes"] if r["attributes"] is not None else None
         if raw_attrs:
             try:
                 attrs = json.loads(raw_attrs) if isinstance(raw_attrs, str) else (raw_attrs or {})
@@ -279,6 +279,4 @@ def write_favorites(rows, out_dir: str, formats=("vlc", "kodi", "tivimate")):
         results[fmt] = path
         _LOG.info("write_favorites wrote fmt=%s path=%s entries=%d",
                   fmt, results[fmt], len(entries))
-    return results
-    _LOG.info("write_favorites wrote formats=%s entries=%d", list(results.keys()), len(entries))
     return results

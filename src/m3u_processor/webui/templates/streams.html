@@ -130,8 +130,8 @@ function render(){
   });
   const tb=document.querySelector('#streams tbody');
   tb.innerHTML=data.map(r=>`<tr data-id="${r.id}">
-    <td><input type="checkbox" class="sel" data-id="${r.id}" data-url="${esc(r.url)}"></td>
-    <td style="text-align:center; cursor:pointer; font-size:1.2em;" onclick="toggleFav(${r.id},'${esc(r.url)}')" title="${r.is_favorite?'Remove from favorites':'Add to favorites'}">${r.is_favorite?'★':'☆'}</td>
+    <td><input type="checkbox" class="sel" data-id="${r.id}" data-url="${esc(r.url)}" data-fav="${r.favorite_id||0}"></td>
+    <td style="text-align:center; cursor:pointer; font-size:1.2em;" onclick="toggleFav(${r.id})" title="${r.is_favorite?'Remove from favorites':'Add to favorites'}">${r.is_favorite?'★':'☆'}</td>
     <td onclick="showDetail(${r.id})">${esc(r.name)}</td>
     <td><a href="/providers?search=${encodeURIComponent(r.provider_domain)}" style="color:#93c5fd;text-decoration:none;" title="View provider details">${esc(r.provider_domain)}</a></td>
     <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
@@ -148,6 +148,7 @@ function render(){
 
 function selectedIds(){return [...document.querySelectorAll('.sel:checked')].map(c=>+c.dataset.id);}
 function selectedUrls(){return [...document.querySelectorAll('.sel:checked')].map(c=>c.dataset.url);}
+function selectedFavIds(){return [...document.querySelectorAll('.sel:checked')].map(c=>+c.dataset.fav || 0).filter(x=>x>0);}
 function refreshSelCount(){
   const n=selectedIds().length;
   document.getElementById('sel-count').textContent=n+' selected';
@@ -156,13 +157,14 @@ function refreshSelCount(){
 function selAll(el){document.querySelectorAll('.sel').forEach(c=>c.checked=el.checked);refreshSelCount();}
 document.addEventListener('change',e=>{if(e.target.classList.contains('sel'))refreshSelCount();});
 
-function toggleFav(streamId, url){
+function toggleFav(streamId){
+  const r=_rows.find(x=>x.id===streamId); if(!r) return;
   fetch('/api/favorites/toggle',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({url})}).then(r=>r.json()).then(d=>{
+    body:JSON.stringify({url:r.url})}).then(res=>res.json()).then(d=>{
     if(d.ok){
       toast(d.action==='added'?'★ Added to favorites':'☆ Removed from favorites');
       loadStreams();
-    }
+    } else toast('error: '+(d.error||''));
   });
 }
 
@@ -176,7 +178,7 @@ function batchAddFavorite(){
 }
 
 function batchRemoveFavorite(){
-  const ids=selectedIds(); if(!ids.length) return;
+  const ids=selectedFavIds(); if(!ids.length) return toast('No favorites selected');
   fetch('/api/favorites/batch-remove',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({ids})}).then(r=>r.json()).then(d=>{
     toast(d.ok?`☆ ${d.removed} removed from favorites`:('error: '+(d.error||'')));
@@ -213,8 +215,8 @@ function showDetail(id){
     <div class="urlbox"><code>${esc(r.original_url||r.url)}</code>
       <button onclick="copyUrl(this)">copy</button></div>
     <div style="display:flex; gap:6px; margin-top:8px;">
-      <button class="btn" onclick="toggleFav(${r.id},'${esc(r.url)}');showDetail(${r.id})">${r.is_favorite?'☆ Remove favorite':'★ Add favorite'}</button>
-      <button class="btn danger" onclick="disableProvider('${esc(r.provider_domain)}')">disable provider</button>
+      <button class="btn" onclick="toggleFav(${r.id});showDetail(${r.id})">${r.is_favorite?'☆ Remove favorite':'★ Add favorite'}</button>
+      <button class="btn danger" onclick="disableProvider(${r.id})">disable provider</button>
     </div>
     <button class="btn" style="margin-top:8px;" onclick="document.getElementById('detail').innerHTML=''">close</button>`;
 }
@@ -222,12 +224,13 @@ function copyUrl(btn){
   const url=btn.parentElement.querySelector('code').textContent;
   navigator.clipboard.writeText(url).then(()=>{btn.textContent='copied!';setTimeout(()=>btn.textContent='copy',1200);});
 }
-function disableProvider(domain){
-  if(!confirm('Disable provider '+domain+'?')) return;
+function disableProvider(streamId){
+  const r=_rows.find(x=>x.id===streamId); if(!r) return;
+  if(!confirm('Disable provider '+r.provider_domain+'?')) return;
   fetch('/api/provider/disable',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({domain,reason:'web'})}).then(()=>{toast('disabled '+domain);loadStreams();});
+    body:JSON.stringify({domain:r.provider_domain,reason:'web'})}).then(()=>{toast('disabled '+r.provider_domain);loadStreams();});
 }
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function esc(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 // sortable headers
 document.querySelectorAll('.sortable').forEach(th=>{

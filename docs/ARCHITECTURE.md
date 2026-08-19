@@ -147,7 +147,10 @@ streams(
   first_seen, updated_at
 )
 runs(run_id PK, mode, started_at, finished_at, status, stats_json, error_message)
-favorites(id PK, name, stream_id, group_id, is_enabled, is_working, …)
+favorites(id PK, name, url UNIQUE, original_url, source_path, is_url,
+  extinf_raw, attributes JSON, is_enabled, is_working NULL|0|1,
+  last_working, consecutive_failures, total_failures,
+  consecutive_pass, total_pass, total_successes, last_checked, …)
 favorite_groups(id PK, name, …)
 favorite_membership(favorite_id, group_id)
 providers(domain PK, enabled, state, …)

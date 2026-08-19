@@ -288,6 +288,23 @@ class Database:
         for col, ctype in fav_add.items():
             if col not in fcols:
                 self.writer.execute(f"ALTER TABLE favorites ADD COLUMN {col} {ctype}")
+        # Migration: favorites.url must be unique (star toggle / /api/streams join
+        # assume one favorite per stream). Dedup existing rows (keep lowest id)
+        # before creating the UNIQUE index, so a legacy DB with duplicates
+        # doesn't fail the migration.
+        f_dups = self.writer.execute(
+            "SELECT MIN(id) AS keep_id, url FROM favorites "
+            "GROUP BY url HAVING COUNT(*) > 1").fetchall()
+        for d in f_dups:
+            self.writer.execute(
+                "DELETE FROM favorites WHERE url=? AND id != ?",
+                (d["url"], d["keep_id"]))
+        if f_dups:
+            self.writer.commit()
+        f_idx = {r[1] for r in self.writer.execute(
+            "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='favorites'")}
+        if "idx_favorites_url" not in f_idx:
+            self.writer.execute("CREATE UNIQUE INDEX idx_favorites_url ON favorites(url)")
         if version != SCHEMA_VERSION:
             self.writer.execute(
                 "INSERT OR REPLACE INTO config(key, value) VALUES('schema_version', ?)",
@@ -335,6 +352,10 @@ class Database:
         source is given AND the url carries a token query string, refresh mode
         can re-extract a fresh token from that source."""
         c = self.writer
+        existing = c.execute(
+            "SELECT id FROM favorites WHERE url=?", (url,)).fetchone()
+        if existing:
+            return existing["id"]
         cur = c.execute(
             "INSERT INTO favorites(name, url, original_url, "
             "source_path, is_url, extinf_raw, attributes, is_enabled) "
@@ -458,19 +479,22 @@ class Database:
             "SELECT id, name FROM favorite_groups ORDER BY name").fetchall()
 
     def favorite_set_group(self, fids, group_name):
-        """Assign every given favorite to `group_name` (replaces its group membership)."""
+        """Assign every given favorite to `group_name` (replaces its group
+        membership). An empty `group_name` removes membership entirely."""
         c = self.writer
-        g = c.execute("SELECT id FROM favorite_groups WHERE name=?",
-                      (group_name,)).fetchone()
-        if not g:
-            cur = c.execute("INSERT INTO favorite_groups(name) VALUES(?)", (group_name,))
-            gid = cur.lastrowid
-        else:
-            gid = g["id"]
         for fid in fids:
             c.execute("DELETE FROM favorite_membership WHERE favorite_id=?", (fid,))
-            c.execute("INSERT OR IGNORE INTO favorite_membership(favorite_id, group_id) "
-                      "VALUES(?,?)", (fid, gid))
+        if group_name:
+            g = c.execute("SELECT id FROM favorite_groups WHERE name=?",
+                          (group_name,)).fetchone()
+            if not g:
+                cur = c.execute("INSERT INTO favorite_groups(name) VALUES(?)", (group_name,))
+                gid = cur.lastrowid
+            else:
+                gid = g["id"]
+            for fid in fids:
+                c.execute("INSERT OR IGNORE INTO favorite_membership(favorite_id, group_id) "
+                          "VALUES(?,?)", (fid, gid))
         c.commit()
 
     # --- run error log (run-scoped; surfaced in the Web UI) ---
