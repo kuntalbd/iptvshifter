@@ -6,14 +6,6 @@
   <p class="muted">Checking for an active run…</p>
 </div>
 <script>
-function fmtTime(t){ if(!t) return "—"; return new Date(t).toLocaleString(); }
-function fmtElapsed(start){
-  if(!start) return "—";
-  const s=new Date(start).getTime();
-  let sec=Math.floor((Date.now()-s)/1000);
-  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), x=sec%60;
-  return (h?h+"h ":"")+(m?m+"m ":"")+x+"s";
-}
 function render(d){
   const el=document.getElementById("live");
   if(!d.is_run_active){
@@ -37,7 +29,7 @@ function render(d){
     <p class="muted">run_id ${d.run_id} · started ${fmtTime(d.started_at)} · auto-refresh 3s</p>`;
 }
 function load(){
-  fetch("/api/live").then(r=>r.json()).then(render);
+  apiGet("/api/live").then(render);
 }
 load(); setInterval(load, 3000);
 </script>

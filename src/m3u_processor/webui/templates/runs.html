@@ -25,18 +25,14 @@
 </div>
 <div id="timeline" class="timeline"></div>
 <script>
-function fmtDur(s){ if(s==null) return "—"; s=Math.round(s);
-  const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), x=s%60;
-  return (h?h+"h ":"")+(m?m+"m ":"")+x+"s"; }
-function fmtTime(t){ if(!t) return "—"; return new Date(t).toLocaleString(); }
 function badge(st){ const m={completed:"ok",stopped:"warn",running:"run",discarded:"bad"};
   return `<span class="pill ${m[st]||''}">${st}</span>`; }
 function loadRuns(){
   const mode=document.getElementById("f-mode").value;
   const status=document.getElementById("f-status").value;
   const q=document.getElementById("f-q").value.toLowerCase();
-  fetch("/api/runs?limit=200&mode="+encodeURIComponent(mode)+"&status="+encodeURIComponent(status))
-    .then(r=>r.json()).then(rows=>{
+  apiGet("/api/runs?limit=200&mode="+encodeURIComponent(mode)+"&status="+encodeURIComponent(status))
+    .then(rows=>{
       const el=document.getElementById("timeline");
       let html="";
       rows.filter(r=>{

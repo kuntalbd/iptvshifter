@@ -40,7 +40,7 @@
 {% endif %}
 
 <script>
-fetch('/api/health-stats').then(r=>r.json()).then(d=>{
+apiGet('/api/health-stats').then(d=>{
   document.getElementById('h-healthy').textContent=d.healthy;
   document.getElementById('h-medium').textContent=d.medium;
   document.getElementById('h-slow').textContent=d.slow;
@@ -49,9 +49,8 @@ fetch('/api/health-stats').then(r=>r.json()).then(d=>{
 });
 function generateOutputs(){
   const s=document.getElementById('gen-status'); s.textContent='generating…';
-  fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({formats:['vlc','kodi','tivimate']})})
-    .then(r=>r.json()).then(d=>{ s.textContent='done: '+JSON.stringify(d.files); })
+  apiPost('/api/generate',{formats:['vlc','kodi','tivimate']})
+    .then(d=>{ s.textContent='done: '+JSON.stringify(d.files); })
     .catch(e=>{ s.textContent='error: '+e; });
 }
 </script>

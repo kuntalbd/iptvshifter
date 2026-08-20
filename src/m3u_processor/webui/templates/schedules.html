@@ -29,7 +29,7 @@
 <pre id="msg"></pre>
 <script>
 async function load(){
-  const r=await fetch('/api/scheduler'); const d=await r.json();
+  const d=await apiGet('/api/scheduler');
   const tb=document.querySelector('#jobs tbody'); tb.innerHTML='';
   (d.jobs||[]).forEach(j=>{
     const tr=document.createElement('tr');
@@ -44,14 +44,12 @@ async function saveJob(){
   const mode=document.getElementById('j_mode').value;
   const cron=document.getElementById('j_cron').value.trim();
   if(!name){document.getElementById('msg').textContent='Name required';return;}
-  const r=await fetch('/api/scheduler',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name,mode,cron})});
-  const d=await r.json();
+  const d=await apiPost('/api/scheduler',{name,mode,cron});
   document.getElementById('msg').textContent=JSON.stringify(d);
   load();
 }
 async function delJob(name){
-  const r=await fetch('/api/scheduler',{method:'DELETE',headers:{'Content-Type':'application/json'},
+  const r=await apiFetch('/api/scheduler',{method:'DELETE',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({name})});
   const d=await r.json();
   document.getElementById('msg').textContent=JSON.stringify(d);

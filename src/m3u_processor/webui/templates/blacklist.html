@@ -15,14 +15,13 @@
 <script>
 function loadBL(){
   const tier=document.getElementById('tier').value;
-  fetch(`/api/streams?tier=${tier}&limit=500`).then(r=>r.json()).then(rows=>{
+  apiGet(`/api/streams?tier=${tier}&limit=500`).then(rows=>{
     const tb=document.querySelector('#bl tbody');
     tb.innerHTML=rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.provider_domain)}</td>
       <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
       <td>${esc(r.blacklist_reason||'')}</td></tr>`).join('');
   });
 }
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 loadBL();
 </script>
 {% endblock %}

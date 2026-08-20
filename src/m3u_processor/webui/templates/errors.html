@@ -20,17 +20,11 @@
 </table>
 
 <script>
-function esc(s){
-  return String(s == null ? '' : s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
 async function load(){
   const rid = document.getElementById('rid').value.trim();
   let url = '/api/run-errors?limit=300';
   if(rid) url += '&run_id=' + encodeURIComponent(rid);
-  const r = await fetch(url);
-  const d = await r.json();
+  const d = await apiGet(url);
   const tb = document.getElementById('rows');
   if(!d.errors.length){ tb.innerHTML = '<tr><td colspan="5">no errors logged</td></tr>'; return; }
   tb.innerHTML = d.errors.map(e => `<tr>

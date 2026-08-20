@@ -18,8 +18,7 @@ function generate(){
   if(document.getElementById('f_vlc').checked) fm.push('vlc');
   if(document.getElementById('f_kodi').checked) fm.push('kodi');
   if(document.getElementById('f_tivimate').checked) fm.push('tivimate');
-  fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({formats:fm})}).then(r=>r.json()).then(j=>{
+  apiPost('/api/generate',{formats:fm}).then(j=>{
       document.getElementById('gen').textContent=JSON.stringify(j.files,null,2);
     });
 }
