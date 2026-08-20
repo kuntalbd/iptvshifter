@@ -254,6 +254,61 @@ def test_reaper_keeps_alive_concurrent_run():
     reopen.close()
 
 
+def test_reaper_keeps_active_web_run_hex_id():
+    # Web runs get run_ids ending in a random hex suffix (no pid). The reaper
+    # must liveness-probe the pid stored in stats_json and NOT reap an ACTIVE
+    # web run — otherwise every scheduled token-refresh that overlaps a web run
+    # would wrongly mark it 'stopped' (regression for the 2026-08-20 finding).
+    import json as _json
+    tmp = tempfile.mkdtemp()
+    cfg = _build_cfg(tmp)
+    db = Database(cfg.get("database.path"))
+    db.init_db(backup=False)
+    from m3u_processor.orchestrator import Orchestrator
+    alive_pid = os.getpid()
+    db.execute(
+        "INSERT INTO runs(run_id, mode, started_at, status, stats_json) "
+        "VALUES(?, 'quick', '2020-01-01T00:00:00+00:00', 'running', ?)",
+        ("web-quick-1787164997844-894b09", _json.dumps({"mode": "quick", "pid": alive_pid})),
+    )
+    db.commit()
+    orch = Orchestrator(db, cfg)
+    orch.run(mode="refresh")  # scheduled run starts; must spare the live web run
+    db.close()
+    reopen = Database(cfg.get("database.path"))
+    reopen.init_db(backup=False)
+    st = reopen.query("SELECT status FROM runs WHERE run_id=?",
+                      ("web-quick-1787164997844-894b09",))[0][0]
+    assert st == "running", f"active web run was wrongly reaped: {st}"
+    reopen.close()
+
+
+def test_reaper_stops_dead_web_run_hex_id():
+    # A DEAD web run (hard-killed unit) still stores its pid in stats_json; the
+    # reaper must reap it once that pid is gone, even though run_id is hex.
+    import json as _json
+    tmp = tempfile.mkdtemp()
+    cfg = _build_cfg(tmp)
+    db = Database(cfg.get("database.path"))
+    db.init_db(backup=False)
+    from m3u_processor.orchestrator import Orchestrator
+    dead_pid = 999999
+    db.execute(
+        "INSERT INTO runs(run_id, mode, started_at, status, stats_json) "
+        "VALUES(?, 'quick', '2020-01-01T00:00:00+00:00', 'running', ?)",
+        ("web-quick-dead-abcdef", _json.dumps({"mode": "quick", "pid": dead_pid})),
+    )
+    db.commit()
+    orch = Orchestrator(db, cfg)
+    orch.run(mode="refresh")
+    db.close()
+    reopen = Database(cfg.get("database.path"))
+    reopen.init_db(backup=False)
+    st = reopen.query("SELECT status FROM runs WHERE run_id=?", ("web-quick-dead-abcdef",))[0][0]
+    assert st == "stopped", f"dead web run was not reaped: {st}"
+    reopen.close()
+
+
 def test_publish_repo_root_searches_upward_not_dirname():
     # Regression: repo_root must be found by walking UP from dst (the out/
     # folder) for a .git, NOT by taking dirname(dst). The old dirname() logic

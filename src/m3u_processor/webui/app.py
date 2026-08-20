@@ -120,10 +120,11 @@ def create_app(cfg):
     # rotate the token file without restarting the daemon).
     _auth_token = None
     _auth_token_mtime = None
+    _warned_auth_absent = False
 
     @app.middleware("http")
     async def _api_auth(request: Request, call_next):
-        nonlocal _auth_token, _auth_token_mtime
+        nonlocal _auth_token, _auth_token_mtime, _warned_auth_absent
         path = request.url.path
         if not (path == "/api" or path.startswith("/api/")):
             return await call_next(request)
@@ -140,6 +141,14 @@ def create_app(cfg):
             _auth_token = None
         expected = _auth_token or ""
         if not expected:
+            # auth_token_file is CONFIGURED but missing/empty -> auth is
+            # silently disabled (a footgun: an absent file must not quietly
+            # expose every /api/* endpoint on the network). Warn loudly.
+            if tf and not _warned_auth_absent:
+                _LOG.warning(
+                    "webui auth DISABLED: auth_token_file=%r missing or empty; "
+                    "all /api/* endpoints are unauthenticated", tf)
+                _warned_auth_absent = True
             return await call_next(request)
         provided = request.headers.get("Authorization", "")
         if provided.lower().startswith("bearer "):
@@ -714,13 +723,20 @@ def create_app(cfg):
                 return {"run_id": run_id, "mode": mode,
                         "error": "systemd-run failed: "
                                  + launch.stderr.strip()[:200]}
+        except subprocess.TimeoutExpired:
+            _LOG.error("api_run systemd-run timed out after 20s run_id=%s", run_id)
+            return {"run_id": run_id, "mode": mode,
+                    "error": "systemd-run timed out (launch hung) — check systemd status"}
         except FileNotFoundError:
-            # systemd-run unavailable (bare container) — fall back to a plain
-            # detached process. Note: this child inherits THIS service's cgroup
-            # (and thus its MemoryMax), so the fallback is best-effort only.
-            subprocess.Popen(cmd, start_new_session=True,
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
+            # systemd-run unavailable (bare container). DO NOT fall back to a
+            # plain Popen: the child would inherit THIS service's cgroup (and
+            # its MemoryMax), so a validation run spawning ~8 isolated children
+            # (~200MB each) would trip the same kernel OOM kill that ADR-015
+            # fixes. Fail closed and tell the operator.
+            _LOG.error("api_run refused: systemd-run unavailable (systemd needed for ADR-015)")
+            return {"run_id": run_id, "mode": mode,
+                    "error": "systemd-run unavailable — run cannot be launched "
+                             "safely (systemd user session required)"}
         _LOG.info("api_run launched run_id=%s mode=%s unit=m3u-web-%s",
                   run_id, mode, run_id)
         _LAUNCHED_RUNS[run_id] = time.time()
@@ -734,7 +750,7 @@ def create_app(cfg):
     @app.get("/api/events")
     def api_events(run_id: str):
         # 404 on a run this web process never launched (bounded in-memory
-        # registry) and that has no DB row yet — matches the pre-ADR-011
+        # registry) and that has no DB row yet — matches the pre-ADR-015
         # contract where unknown run_ids errored immediately instead of
         # streaming pings forever.
         db = _get_db(cfg)
@@ -749,55 +765,56 @@ def create_app(cfg):
 
         def gen():
             last_progress = None
-            while True:
-                db = _get_db(cfg)
-                try:
-                    row = db.query(
-                        "SELECT status, progress_json, stats_json, error_message "
-                        "FROM runs WHERE run_id=?", (run_id,)
-                    )
-                    if not row:
-                        yield "data: " + json.dumps({"type": "ping"}) + "\n\n"
-                        time.sleep(2)
-                        continue
-                    r = row[0]
-                    status = r["status"]
-                    # stream progress only when it changed
-                    prog_raw = r["progress_json"] or "{}"
+            db = _get_db(cfg)
+            try:
+                while True:
                     try:
-                        prog = json.loads(prog_raw)
-                    except Exception:
-                        prog = {}
-                    if prog.get("done") is not None and prog_raw != last_progress:
-                        last_progress = prog_raw
-                        yield "data: " + json.dumps({
-                            "type": "progress",
-                            "done": prog.get("done", 0),
-                            "total": prog.get("total", 0),
-                        }) + "\n\n"
-                    if status == "discarded":
-                        stats = json.loads(r["stats_json"] or "{}")
-                        yield "data: " + json.dumps({
-                            "type": "discarded",
-                            "reason": stats.get("discard_reason",
-                                                "another run active"),
-                            "run_id": run_id,
-                        }) + "\n\n"
+                        row = db.query(
+                            "SELECT status, progress_json, stats_json, error_message "
+                            "FROM runs WHERE run_id=?", (run_id,)
+                        )
+                        if not row:
+                            yield "data: " + json.dumps({"type": "ping"}) + "\n\n"
+                            time.sleep(2)
+                            continue
+                        r = row[0]
+                        status = r["status"]
+                        # stream progress only when it changed
+                        prog_raw = r["progress_json"] or "{}"
+                        try:
+                            prog = json.loads(prog_raw)
+                        except Exception:
+                            prog = {}
+                        if prog.get("done") is not None and prog_raw != last_progress:
+                            last_progress = prog_raw
+                            yield "data: " + json.dumps({
+                                "type": "progress",
+                                "done": prog.get("done", 0),
+                                "total": prog.get("total", 0),
+                            }) + "\n\n"
+                        if status == "discarded":
+                            stats = json.loads(r["stats_json"] or "{}")
+                            yield "data: " + json.dumps({
+                                "type": "discarded",
+                                "reason": stats.get("discard_reason",
+                                                    "another run active"),
+                                "run_id": run_id,
+                            }) + "\n\n"
+                            break
+                        if status in ("completed", "stopped", "failed", "error"):
+                            stats = json.loads(r["stats_json"] or "{}")
+                            yield "data: " + json.dumps({
+                                "type": "done", "stats": stats, "run_id": run_id,
+                                "status": status,
+                            }) + "\n\n"
+                            break
+                    except Exception as e:  # noqa: BLE001
+                        yield "data: " + json.dumps({"type": "error",
+                                                     "message": str(e)}) + "\n\n"
                         break
-                    if status in ("completed", "stopped", "failed", "error"):
-                        stats = json.loads(r["stats_json"] or "{}")
-                        yield "data: " + json.dumps({
-                            "type": "done", "stats": stats, "run_id": run_id,
-                            "status": status,
-                        }) + "\n\n"
-                        break
-                except Exception as e:  # noqa: BLE001
-                    yield "data: " + json.dumps({"type": "error",
-                                                 "message": str(e)}) + "\n\n"
-                    break
-                finally:
-                    db.close()
-                time.sleep(1)
+                    time.sleep(1)
+            finally:
+                db.close()
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

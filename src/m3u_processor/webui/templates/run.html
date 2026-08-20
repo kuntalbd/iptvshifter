@@ -56,6 +56,9 @@ function startRun(){
   fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)})
     .then(r=>r.json()).then(j=>{
+      if(j.error){ document.getElementById('progress').textContent='error';
+        document.getElementById('result').textContent='Launch failed: '+j.error;
+        return; }
       document.getElementById('progress').textContent='run '+j.run_id+' started (mode='+j.mode+')…';
       if(es) es.close();
       es=new EventSource('/api/events?run_id='+encodeURIComponent(j.run_id));
@@ -66,7 +69,10 @@ function startRun(){
         else if(d.type==='done'){ document.getElementById('progress').textContent='done'; document.getElementById('result').textContent=JSON.stringify(d.stats,null,2); es.close(); refreshActive(); }
         else if(d.type==='error'){ document.getElementById('progress').textContent='error'; document.getElementById('result').textContent=d.message; es.close(); }
       };
-    });
+      es.onerror=()=>{ document.getElementById('progress').textContent='stream error';
+        document.getElementById('result').textContent='Event stream failed — check the server log.'; es.close(); };
+    }).catch(e=>{ document.getElementById('progress').textContent='error';
+      document.getElementById('result').textContent='Request failed: '+e; });
 }
 async function stopRun(){
   const r=await fetch('/api/run/stop',{method:'POST'});

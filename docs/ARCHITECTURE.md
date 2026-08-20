@@ -69,8 +69,9 @@ repo is a *derived* artifact, regenerated every run.
 - Reads `sources.playlist_dir` (glob `file_patterns`) → `ingest_source(file)`.
 - `merge_into_db` inserts new (`is_working` defaults to `NULL`) and upgrades
   tokened `original_url` on conflict (F11 winner / C3 multi-token).
-- **Web UI `/api/run` does NOT ingest** — it calls `orch.run()` directly,
-  bypassing the CLI ingest step. Known limitation (see §7 ADR-009).
+- **Web UI `/api/run`** launches the same CLI pipeline in a detached systemd
+  transient unit (ADR-015), so it ingests exactly like a CLI run — no
+  bypass. See ADR-009 (closed) / TC-2.
 
 ---
 
@@ -93,7 +94,7 @@ This is the contract. Any deviation is a bug.
   the source playlist.
 - New/unvalidated streams (`is_working IS NULL`) are **only ever validated**
   by `quick`/`regular`/`full`. If those modes never run, NULL streams stay
-  NULL forever — and since 2026-08-19 (ADR-009) they are **excluded** from
+  NULL forever — and since 2026-08-19 (ADR-005) they are **excluded** from
   the published playlist (see §4).
 - **Validation is batched & persisted progressively**, NOT all-at-once at the
   end. A long run (15k+ streams) takes 20-30 min; progress shows in the UI
@@ -110,7 +111,7 @@ This is the contract. Any deviation is a bug.
 
 `write_streams` (writers.py) renders `out/working.m3u` (+ kodi/tivimate) from
 `streams WHERE enabled=1 AND blacklist_tier='none' AND is_working=1` — **only
-verified-working streams are published** (ADR-009, resolved 2026-08-19:
+verified-working streams are published** (ADR-005, resolved 2026-08-19:
 `is_working IS NULL` rows are excluded, so unvalidated links never reach the
 playlist). New ingest rows appear in `working.m3u` only after a
 `quick`/`regular`/`full` run validates them.
@@ -192,13 +193,16 @@ run_errors, blacklist_events, enable_events  -- audit logs
   rather than discard a possibly-working token.
 - **ADR-004** (mode split): `quick`=latency-only, `regular`/`full`=throughput,
   `refresh`=token-only (no health check).
-- **ADR-005** (publish only `is_working=1 OR NULL`): unvalidated streams
-  published too — **see gap §4**.
+- **ADR-005** (publish only `is_working=1 OR NULL`): originally unvalidated
+  (`NULL`) streams were published too. **Resolved 2026-08-19**: `is_working
+  IS NULL` rows are now **excluded** from the published playlist, so
+  unvalidated links never reach `out/` (see §4).
 - **ADR-008 (Option B)**: favorites publish **tokened `original_url`** (not
   tokenless), mirroring `write_streams`.
-- **ADR-009 (OPEN)**: Web UI `/api/run` bypasses ingest → empty-DB UI run
-  does nothing. Either (a) make UI ingest, or (b) document that UI only
-  re-validates existing rows. **Not yet fixed.**
+- **ADR-009 (CLOSED)**: Web UI `/api/run` previously bypassed ingest → empty-DB
+  UI run did nothing. Fixed: the run now launches the same CLI pipeline
+  (`__main__.py` `run`, non-refresh modes ingest `feed_file` + `playlist_dir`
+  before `orch.run`). See TC-2 (✅ FIXED).
 - **ADR-010**: content-hash guard in `publish_outputs` stops commit storms
   when output is unchanged.
 - **ADR-011**: test-suite loads `examples/config.example.yaml` with
@@ -218,6 +222,21 @@ run_errors, blacklist_events, enable_events  -- audit logs
   network semaphore in the **abandonable pool worker** (not the unkillable
   daemon thread), with a hard wall-clock per-link deadline — so a native stall
   can never exhaust the semaphore and deadlock the run.
+- **ADR-015 (OOM-safe web runs)**: a web-triggered run is launched in a
+  **detached systemd transient unit** (`systemd-run --user --unit m3u-web-<id>`
+  `--collect`), NOT a worker thread of the web process. The web service unit is
+  capped (`MemoryMax` 1G / 768M high); validation spawns isolated children
+  (~200MB RSS each) whose combined footprint inside that cgroup tripped the
+  kernel OOM killer (2026-08-19). A transient unit is a **sibling** of the
+  service in the cgroup tree (no inherited cap), so runs complete and only the
+  publish result is reported back. Progress is surfaced via the DB `runs` row,
+  which `/api/events` polls (SSE). Validation children are further **bounded**:
+  at most `validation.max_concurrent` isolated child processes are alive at
+  once (semaphore + fixed-size pool, consumed via `as_completed` so progress
+  advances as chunks finish — not `pool.map` order). Each run row now stores
+  the orchestrator's real OS pid in `stats_json` so the reaper can
+  liveness-probe web runs (hex-suffixed run_ids carry no pid) instead of
+  wrongly marking an active run 'stopped'.
 
 ---
 

@@ -259,15 +259,30 @@ class Orchestrator:
         # PID is still alive belongs to a genuine concurrent run and must be
         # left untouched — otherwise a scheduled token-refresh would wrongly
         # kill a long-running full pass that merely overlaps it.
-        # Liveness check: parse the trailing -<pid> from run_id and probe it.
+        # Liveness check: parse the trailing -<pid> from run_id, falling back to
+        # the pid this run stored in stats_json at insert time (covers web runs,
+        # whose run_id ends in a random hex suffix). A row whose pid is unknown
+        # (neither in run_id nor stats_json) is left untouched: reaping it on a
+        # guess would wrongly 'stop' an ACTIVE web run whenever a scheduled
+        # token-refresh starts mid-web-run.
         try:
             rows = self.db.query(
-                "SELECT run_id FROM runs WHERE status='running' AND run_id<>?",
+                "SELECT run_id, stats_json FROM runs "
+                "WHERE status='running' AND run_id<>?",
                 (self.run_id,),
             )
-            for (rid,) in rows:
+            for rid, stats_json in rows:
                 pid = _pid_from_run_id(rid)
-                if pid and _process_alive(pid):
+                if pid is None:
+                    try:
+                        stats = json.loads(stats_json or "{}")
+                        pid = stats.get("pid")
+                    except Exception:
+                        pid = None
+                if pid is None:
+                    _LOG.warning("reaper skip run_id=%s (no probeable pid)", rid)
+                    continue
+                if _process_alive(pid):
                     continue  # still running for real -> keep it
                 self.db.execute(
                     "UPDATE runs SET status='stopped', finished_at=CURRENT_TIMESTAMP, "
@@ -301,10 +316,15 @@ class Orchestrator:
             _LOG.warning("run discarded run_id=%s mode=%s (file lock held)", self.run_id, mode)
             return self.stats
 
-        # Lock acquired — record THIS run as the active one.
+        # Lock acquired — record THIS run as the active one. Store the real OS
+        # PID in stats_json so the reaper can liveness-probe web runs too (their
+        # run_id ends in a random hex suffix, not a PID, so _pid_from_run_id
+        # alone cannot tell an active web run from a zombie).
         self.db.execute(
-            "INSERT INTO runs(run_id, mode, started_at, status) VALUES(?,?,?,?)",
-            (self.run_id, mode, datetime.now(timezone.utc).isoformat(), "running"),
+            "INSERT INTO runs(run_id, mode, started_at, status, stats_json) "
+            "VALUES(?,?,?,?,?)",
+            (self.run_id, mode, datetime.now(timezone.utc).isoformat(), "running",
+             json.dumps({"pid": os.getpid()})),
         )
         self.db.commit()
 

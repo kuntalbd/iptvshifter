@@ -156,7 +156,8 @@ sudo ./scripts/install.sh        # generates + enables systemd units
 ```
 Units created: `m3u-processor.service` (daily run), `m3u-processor.timer`
 (daily schedule), `m3u-processor-web.service` (UI). All apply Pi hardening
-(`MemoryMax=400M`, `Nice=10`, `NoNewPrivileges`, `ProtectSystem=strict`).
+(`MemoryMax=1G` web / `2G` quick-run & token-refresh, `Nice=10`,
+`NoNewPrivileges`, `ProtectSystem=strict`).
 Or generate units manually:
 ```bash
 python -m m3u_processor.deploy --mode regular --out /etc/systemd/system

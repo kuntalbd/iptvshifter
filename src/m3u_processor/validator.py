@@ -67,6 +67,19 @@ def _getaddrinfo_timeout(*args, **kwargs):
 
 socket.getaddrinfo = _getaddrinfo_timeout
 
+
+def _sweep_stale_temp_dirs(max_age_s: float = 86400):
+    """Remove leftover m3u_validate_/m3u_results_ temp dirs left by runs that
+    were hard-killed (OOM) before their normal cleanup ran. Best-effort."""
+    import glob
+    for pattern in ("/tmp/m3u_validate_*", "/tmp/m3u_results_*"):
+        for d in glob.glob(pattern):
+            try:
+                if time.time() - os.path.getmtime(d) > max_age_s:
+                    shutil.rmtree(d, ignore_errors=True)
+            except OSError:
+                pass
+
 NON_HTTP_SCHEMES = {"rtmp", "rtsp", "mmsh", "mms", "srt", "udp", "rtmpe", "rtmpt"}
 
 # Outcome classes returned by validate_one
@@ -624,6 +637,7 @@ class StreamValidator:
 
         workdir = _tf.mkdtemp(prefix="m3u_validate_")
         out_dir = _tf.mkdtemp(prefix="m3u_results_")
+        _sweep_stale_temp_dirs()
         chunk_paths = []
         for i, ch in enumerate(chunks):
             p = os.path.join(workdir, f"chunk_{i}.json")
@@ -636,7 +650,7 @@ class StreamValidator:
         # per-chunk budget caps a runaway; a crashed/dead chunk is marked
         # failed and the rest continue.
         #
-        # MEMORY BOUND (ADR-011, 2026-08-19): children are NOT all spawned up
+        # MEMORY BOUND (ADR-015, 2026-08-19): children are NOT all spawned up
         # front — that is exactly what tripped the kernel OOM killer, since each
         # isolated child costs ~200MB RSS and the web/quick-run systemd units
         # are capped at MemoryMax=400M (88 × 200MB ≈ 17GB potential). A child is
@@ -700,16 +714,15 @@ class StreamValidator:
         with ThreadPoolExecutor(max_workers=max(1, min(n_chunks, self.max_concurrent))) as pool:
             futs = {pool.submit(_collect_one, (i, chunks[i])): i
                     for i in range(n_chunks)}
-            for fut in as_completed(futs):
-                i, n_ch, status = fut.result()
-                done += n_ch
-                if progress:
-                    progress(done, n)
-        try:
-            shutil.rmtree(workdir, ignore_errors=True)
-            shutil.rmtree(out_dir, ignore_errors=True)
-        except Exception:
-            pass
+            try:
+                for fut in as_completed(futs):
+                    i, n_ch, status = fut.result()
+                    done += n_ch
+                    if progress:
+                        progress(done, n)
+            finally:
+                shutil.rmtree(workdir, ignore_errors=True)
+                shutil.rmtree(out_dir, ignore_errors=True)
         _log.info("validate_batch_isolated done n=%d in %.1fs", len(results), _time.monotonic() - _t0)
         return results
 

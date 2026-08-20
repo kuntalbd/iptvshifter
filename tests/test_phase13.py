@@ -261,7 +261,7 @@ def test_webui_run_discard_event(tmp_path, monkeypatch):
     db.init_db(backup=False)
     db.close()
 
-    # ADR-011: /api/run now launches the run as a DETACHED systemd transient
+    # ADR-015: /api/run now launches the run as a DETACHED systemd transient
     # unit (m3u-web-<run_id>) instead of an in-process worker thread, so the
     # validation's child processes live OUTSIDE the web service's MemoryMax
     # cgroup. In tests we stub systemd-run to a no-op and drive the run to
