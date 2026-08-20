@@ -246,6 +246,23 @@ run_errors, blacklist_events, enable_events  -- audit logs
   on 401, prompts for the token once — so UI pages keep working after
   `auth_token_file` is enabled (SSE `/api/events` passes the token via
   `?token=`, since EventSource cannot set headers).
+- **ADR-017 (unified UI framework)**: every page rebuilt from scratch on a
+  single framework so all tables behave identically. Base UI is
+  **Pico.css** (`static/pico.min.css`, dark theme via `data-theme="dark"`)
+  with `static/style.css` as a theme layer (Pico `--pico-*` variables +
+  component classes: `.toolbar`, `.data-table`, `.chip/.pill/.badge`,
+  `.summary-bar`, `.pagination`, `.detail`, `.timeline`, `.btn` variants).
+  `static/app.js` adds a shared **`DataTable`** component (sortable headers,
+  client-side search + pagination, row selection, empty/loading states) and
+  rendering helpers (`statusPill`, `healthIcon`, `stateText`, `checkmark`).
+  `base.html` provides a sticky top nav with active-state highlighting
+  (`{% block body_attr %} data-page="..."`), page-head/toolbar furniture, and
+  `data-table`/`.table-wrap` markup. Result: streams, providers, blacklist,
+  favorites, errors and schedules all use `DataTable` (sort/filter/search/
+  paginate identically); dashboard/run/runs/live/settings share the same
+  page-head + furniture. `/api/streams` now also returns `blacklist_reason`
+  so the blacklist page shows reasons (previously the field was missing from
+  the SELECT and the column rendered empty).
 
 ---
 
