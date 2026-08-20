@@ -1916,7 +1916,7 @@ https://cdn8.zohanayaan.com:1686/hls/skysfor1.m3u8?md5=hY3-KFciVdLLzKb8eeiTug&ex
 https://7nyaler.streamhostingcdn.top/stream/19/index.m3u8
 #EXTINF:-1 tvg-logo="https://abusaeeidx.github.io/Tv-Channel-Logo/CricHD/runded/18-by-xfireflix.png" group-title="⭐ News",Sky Sports Main Event
 #KODIPROP:inputstream.adaptive.stream_headers=http-referrer=https://executeandship.com/&http-origin=https://executeandship.com
-https://cdn1.zohanayaan.com:1686/hls/skysme.m3u8?md5=fa2RarHZZfst0aqf3rauig&expires=1787232018
+https://cdn1.zohanayaan.com:1686/hls/skysme.m3u8?md5=MPaBjgN3dChSetPlbGVgYQ&expires=1787239468
 #EXTINF:-1 tvg-logo="https://abusaeeidx.github.io/Tv-Channel-Logo/CricHD/runded/18-by-xfireflix.png" group-title="⭐ News",Sky Sports Main Event
 #KODIPROP:inputstream.adaptive.stream_headers=http-referrer=https://executeandship.com/&http-origin=https://executeandship.com
 https://cdn1.zohanayaan.com:1686/hls/skysme.m3u8?md5=fa2RarHZZfst0aqf3rauig&expires=1787232018
@@ -5984,7 +5984,7 @@ https://reflect-fcpublicmedia.cablecast.tv/live-5/live/stream-1/live.m3u8
 https://amg00627-banijaygroup-fearfactor-samsungau-9vdod.amagi.tv/playlist/amg00627-banijaygroup-fearfactor-samsungau/playlist.m3u8
 #EXTINF:-1 tvg-id="FehervarTV.hu@SD" tvg-logo="https://www.fehervartv.hu/css/img/icon-1-2.png" group-title="⭐ Entertainment",Fehérvár TV (360p)
 #KODIPROP:inputstream.adaptive.stream_headers=
-https://cloudfront44.lexanetwork.com:1344/freerelay/fehervartv.sdp/playlist.m3u8?key=EWSj2
+https://cloudfront44.lexanetwork.com:1344/freerelay/fehervartv.sdp/playlist.m3u8
 #EXTINF:-1 tvg-id="FemeninaTV.do@HD" tvg-logo="https://www.vivalivetv.com/public/files/shows/0/1/3802-294x165-FFFFFF.jpg" group-title="⭐ Entertainment",Femenina TV
 #KODIPROP:inputstream.adaptive.stream_headers=
 https://streamunoapp.com:3511/live/femeninatvlive.m3u8
@@ -15529,7 +15529,7 @@ https://streams2.sofast.tv/v1/master/611d79b11b77e2f571934fd80ca1413453772ac7/45
 https://5bf7b725107e5.streamlock.net/davika/davika/playlist.m3u8
 #EXTINF:-1 tvg-logo="https://origin-staticv2.sonyliv.com/videoasset_images/manage_file/1000022536/178714229833818_eng_vs_pak_live_1Test_day2_live_landscape_thumb.jpg" group-title="⭐ Other",Day 2 - 1st Test - 20 Aug 2026 [ENG] - Pakistan Tour of England 2026
 #KODIPROP:inputstream.adaptive.stream_headers=
-https://sonydaimenew.akamaized.net/hls/live/20000291/England_2008/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787265914~acl=/*~id=08557411718024303035007706090870~hmac=60ce038f15ec54fd106ba7f66387ee6aed0741c96164291b32422319166e0bad
+https://sonydaimenew.akamaized.net/hls/live/20000291/England_2008/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787275661~acl=/*~id=61520027750056292263843943934815~hmac=d13c6ba7ac0fe8e2a4eea80ca388d3dc67d0ad9954de7cee9af419d6c5cc13a2
 #EXTINF:-1 tvg-logo="https://origin-staticv2.sonyliv.com/videoasset_images/manage_file/1000022536/178714229833818_eng_vs_pak_live_1Test_day2_live_landscape_thumb.jpg" group-title="⭐ Other",Day 2 - 1st Test - 20 Aug 2026 [ENG] - Pakistan Tour of England 2026
 #KODIPROP:inputstream.adaptive.stream_headers=
 https://sonydaimenew.akamaized.net/hls/live/20000291/England_2008/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787269572~acl=/*~id=40413418275604284007951500767046~hmac=3903a47ab917be3390d96537b0102fe0d6d9bd7a1494768f27b04f71ebc3b981
