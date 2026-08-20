@@ -95,11 +95,15 @@ def _snapshot_hash(out_dir: str) -> str:
 
 
 def _copy_outputs(src_dir: str, dst_dir: str) -> list:
-    """Copy every file in src_dir into dst_dir (overwrite). Returns copied names."""
+    """Copy every file in src_dir into dst_dir (overwrite). Returns copied names.
+
+    Dotfiles are skipped: private bookkeeping (e.g. `.last_publish_hash`) must
+    never leak into the public repo out/ folder or be committed to git.
+    """
     copied = []
     os.makedirs(dst_dir, exist_ok=True)
     for entry in os.scandir(src_dir):
-        if entry.is_file():
+        if entry.is_file() and not entry.name.startswith("."):
             shutil.copy2(entry.path, os.path.join(dst_dir, entry.name))
             copied.append(entry.name)
     return copied
@@ -183,6 +187,8 @@ def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") 
     pub = config.get("publish") or {}
     if not pub.get("enabled", True):
         result["skipped"] = "publish disabled in config"
+        _LOG.info("publish skipped run_id=%s source=%s reason=publish_disabled",
+                  run_id, source)
         return result
 
     src = _resolve(config, "output.dir", "./out")
@@ -195,6 +201,8 @@ def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") 
 
     if not os.path.isdir(src):
         result["error"] = f"source output dir missing: {src}"
+        _LOG.warning("publish failed run_id=%s source=%s error=%s",
+                     run_id, source, result["error"])
         return result
 
     # serialize output regeneration/push across processes
@@ -204,6 +212,7 @@ def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") 
         lock.acquire()
     except TimeoutError:
         result["skipped"] = "another publish in progress; skipped this run"
+        _LOG.warning("publish skipped run_id=%s source=%s reason=lock_timeout", run_id, source)
         return result
     try:
         # 2) copy
@@ -211,6 +220,8 @@ def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") 
             result["copied"] = _copy_outputs(src, dst)
         except Exception as e:  # noqa: BLE001
             result["error"] = f"copy failed: {e}"
+            _LOG.warning("publish copy failed run_id=%s source=%s error=%s",
+                         run_id, source, e)
             return result
 
         # 2b) AUDIT + content-hash guard.
@@ -283,6 +294,8 @@ def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") 
             init = _git(["init", "-q"], repo_root, auth_file)
             if init.returncode != 0:
                 result["error"] = "git init failed: " + (init.stderr.strip()[:200])
+                _LOG.warning("publish git init failed run_id=%s source=%s error=%s",
+                             run_id, source, result["error"])
                 return result
 
         if repo_url:
@@ -312,6 +325,8 @@ def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") 
         add = _git(["add", "out/"], repo_root, auth_file)
         if add.returncode != 0:
             result["error"] = "git add failed: " + (add.stderr.strip()[:200])
+            _LOG.warning("publish git add failed run_id=%s source=%s error=%s",
+                         run_id, source, result["error"])
             return result
 
         status = _git(["status", "--porcelain", "out/"], repo_root, auth_file)
@@ -324,15 +339,21 @@ def publish_outputs(config, run_id: str = "", mode: str = "", source: str = "") 
         result["commit"] = commit.stdout.strip() or commit.stderr.strip()[:120]
         if commit.returncode != 0:
             result["error"] = "git commit failed: " + (commit.stderr.strip()[:200])
+            _LOG.warning("publish git commit failed run_id=%s source=%s error=%s",
+                         run_id, source, result["error"])
             return result
 
         push = _git(["push", repo, f"HEAD:{branch}"], repo_root, auth_file)
         result["push"] = "ok" if push.returncode == 0 else push.stderr.strip()[:200]
         if push.returncode != 0:
             result["error"] = "git push failed: " + result["push"]
+            _LOG.warning("publish git push failed run_id=%s source=%s error=%s",
+                         run_id, source, result["error"])
             return result
 
         result["published"] = True
+        _LOG.info("publish ok run_id=%s source=%s commit=%s",
+                  run_id, source, result.get("commit"))
         return result
     finally:
         lock.release()

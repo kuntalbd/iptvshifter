@@ -49,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--workers", type=int)
     run_p.add_argument("--timeout", type=int)
     run_p.add_argument("--resume", action="store_true")
+    run_p.add_argument("--run-id", help="Explicit run_id (used by web-spawned runs)")
 
     sub.add_parser("init-db", help="Initialize the database schema")
     sub.add_parser("vacuum", help="VACUUM the database")
@@ -192,7 +193,7 @@ def main(argv=None):
             mode = job.get("mode", "quick")
         if not mode:
             mode = cfg.get("validation.mode", "quick")
-        stats = orch.run(mode=mode)
+        stats = orch.run(mode=mode, run_id=getattr(args, "run_id", None) or None)
         print(json.dumps(stats, indent=2))
         db.close()
         return 0

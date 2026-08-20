@@ -29,6 +29,8 @@ from urllib.parse import urlparse
 
 from .logging_utils import get_logger as _get_logger, configure_logging
 
+_LOG = _get_logger("m3u.validator")
+
 _time = time
 
 from .utils import merge_headers
@@ -293,6 +295,8 @@ class StreamValidator:
                 except Exception:
                     pass
         res.reason = last_err or "unknown"
+        _LOG.debug("validate url=%s ok=%s status=%s reason=%s elapsed=%.0fms",
+                   res.url, res.ok, res.status, res.reason, res.elapsed_ms)
         return res
 
     def _measure_health(self, res: Result, resp, url: str, headers: dict, health: bool = True):
@@ -352,10 +356,10 @@ class StreamValidator:
         did_throughput = False
         if self.throughput_check and not self._client and not is_manifest:
             # Only sample with the real transport (tests use a fake client).
-            did_throughput = True
             try:
                 s_res, kbps = self._sample_throughput_raw(url, headers)
                 res.throughput_kbps = kbps
+                did_throughput = True
                 if kbps >= self.throughput_min_kbps:
                     tp_tier = "healthy"
                     tp_score = min(100.0, 60.0 + (kbps / self.throughput_min_kbps) * 20.0)
@@ -368,22 +372,21 @@ class StreamValidator:
 
         # Combine: if both enabled, weight latency 40% + throughput 60%
         # (throughput is the true buffer predictor). If one disabled, use other.
-        # When throughput was skipped (manifest), treat its contribution as the
-        # latency tier so we don't penalize playlists with a false "slow".
+        # When throughput was skipped (manifest, fake client, or the sample
+        # failed), treat its contribution as the latency tier so we don't
+        # penalize playlists with a false "slow" and never raise.
         if self.latency_check and self.throughput_check:
-            if is_manifest:
-                # manifest: latency alone is the health signal
+            if is_manifest or not did_throughput:
+                # manifest / no sample: latency alone is the health signal
                 score, tier = lat_score, lat_tier
             else:
-                # Throughput sample: use a FRESH module-level requests.get (its
-                # own connection, no shared pool) rather than the pooled
-                # thread-local session. Holding a pooled connection for the full
-                # 3s sample across 150 concurrent workers exhausts the pool and
-                # deadlocks the run (every worker blocks waiting for a free
-                # connection). A one-shot get avoids pool contention entirely.
-                score, tier = self._sample_throughput(
-                    url, headers, lat_score, lat_tier
-                )
+                # Throughput was actually sampled (fresh module-level requests.get
+                # in _sample_throughput_raw, own connection, no shared pool so a
+                # 3s sample across many workers can't exhaust the pooled session
+                # and deadlock Phase 2). Weight latency 40% + throughput 60%,
+                # worst tier dominates (slow wins).
+                score = lat_score * 0.4 + tp_score * 0.6
+                tier = self._combine_tier(lat_tier, tp_tier)
         elif self.latency_check:
 
             score, tier = lat_score, lat_tier
@@ -467,8 +470,8 @@ class StreamValidator:
             try:
                 return self._validate_batch_isolated(streams, progress, health)
             except Exception as e:  # noqa: BLE001
-                _get_logger().exception("validate_batch isolation failed, "
-                                        "falling back to in-process: %s", e)
+                _LOG.exception("validate_batch isolation failed, "
+                               "falling back to in-process: %s", e)
                 return self._validate_batch_inproc(streams, progress, health)
         return self._validate_batch_inproc(streams, progress, health)
 
@@ -497,7 +500,7 @@ class StreamValidator:
         # SSL-handshake / trickle stalls that urllib3 timeouts can miss).
         _prev_sock_to = _socket.getdefaulttimeout()
         _socket.setdefaulttimeout(self.hard_timeout + 5)
-        _log = _get_logger()
+        _log = _LOG
         _log.info("validate_batch start n=%d workers=%d hard_timeout=%.0fs",
                   len(streams), self.workers, self.hard_timeout)
 
@@ -527,11 +530,14 @@ class StreamValidator:
                     r = Result()
                     r.url = s.original_url
                     r.reason = f"hard_timeout_{int(self.hard_timeout)}s"
+                    _LOG.debug("link abandoned (hard timeout) url=%s", s.original_url)
                     return r
                 if "e" in box:
                     r = Result()
                     r.url = s.original_url
                     r.reason = f"exc:{type(box['e']).__name__}"
+                    _LOG.debug("link abandoned (exception %s) url=%s",
+                               type(box["e"]).__name__, s.original_url)
                     return r
                 return box.get("r") or Result()
             finally:
@@ -607,8 +613,12 @@ class StreamValidator:
         _t0 = _time.monotonic()
         # self.config is a Config dataclass; pass its underlying dict to the
         # child and let the child reconstruct a Config (dotted .get support).
+        # NOTE: the `logging` section is intentionally KEPT in the child config
+        # so validation subprocesses honor the operator's configured log level /
+        # file and their INFO diagnostics (e.g. "isolated chunk validated") are
+        # actually observable. Each child re-configures its own root logger from
+        # the same settings (per-record flush makes concurrent appends safe).
         cfg = dict(self.config.data)
-        cfg.pop("logging", None)
         config_dir = getattr(self.config, "config_dir", "")
         config_path = getattr(self.config, "config_path", "")
 
@@ -621,51 +631,77 @@ class StreamValidator:
                 json.dump([_ser(s) for s in ch], f)
             chunk_paths.append(p)
 
-        procs = []
-        for i, p in enumerate(chunk_paths):
-            rpath = os.path.join(out_dir, f"res_{i}.json")
-            pr = _mp.Process(
-                target=_isolated_worker,
-                args=(cfg, config_dir, config_path, p, rpath, health, self.workers,
-                      self.hard_timeout, self.max_concurrent, self.retries),
-            )
-            pr.start()
-            procs.append((i, pr, rpath, chunks[i]))
-
         # Collect chunks in PARALLEL: each subprocess validates concurrently,
         # so total wall-clock ≈ the worst single chunk (not the sum). A
         # per-chunk budget caps a runaway; a crashed/dead chunk is marked
         # failed and the rest continue.
+        #
+        # MEMORY BOUND (ADR-011, 2026-08-19): children are NOT all spawned up
+        # front — that is exactly what tripped the kernel OOM killer, since each
+        # isolated child costs ~200MB RSS and the web/quick-run systemd units
+        # are capped at MemoryMax=400M (88 × 200MB ≈ 17GB potential). A child is
+        # started only after a live-process slot is acquired, so at most
+        # `max_concurrent` children are ALIVE at once; as a slot frees, the next
+        # chunk is launched through the same slot. Peak RSS is therefore roughly
+        # max_concurrent × 200MB instead of n_chunks × 200MB.
         results = []
         done = 0
-        n_chunks = len(procs)
+        n_chunks = len(chunks)
+
+        from threading import Semaphore as _Sem
+        slot = _Sem(self.max_concurrent)
 
         def _collect_one(item):
-            i, pr, rpath, ch = item
-            budget = self.hard_timeout * max(1, (len(ch) // self.max_concurrent)) + 120
-            pr.join(timeout=budget)
-            status = "ok"
-            if pr.is_alive():
-                _log.error("validate chunk %d exceeded budget (%.0fs) -> terminate",
-                           i, budget)
-                pr.terminate()
-                try:
-                    pr.join(timeout=10)
-                except Exception:
-                    pass
-                self._append_chunk_failures(results, ch)
-                status = "timeout"
-            elif pr.exitcode is not None and pr.exitcode < 0:
-                _log.error("validate chunk %d child died (exitcode=%s) -> failures",
-                           i, pr.exitcode)
-                self._append_chunk_failures(results, ch)
-                status = "crash"
-            else:
-                self._read_chunk_results(results, ch, rpath)
-            return (i, len(ch), status)
+            i, ch = item
+            # acquire a live-process slot BEFORE starting the child so the total
+            # number of concurrently-running children is bounded by the pool.
+            slot.acquire()
+            rpath = os.path.join(out_dir, f"res_{i}.json")
+            pr = _mp.Process(
+                target=_isolated_worker,
+                args=(cfg, config_dir, config_path, chunk_paths[i], rpath, health,
+                      self.workers, self.hard_timeout, self.max_concurrent,
+                      self.retries),
+            )
+            try:
+                pr.start()
+                budget = self.hard_timeout * max(1, (len(ch) // self.max_concurrent)) + 120
+                pr.join(timeout=budget)
+                status = "ok"
+                if pr.is_alive():
+                    _log.error("validate chunk %d exceeded budget (%.0fs) -> terminate",
+                               i, budget)
+                    pr.terminate()
+                    try:
+                        pr.join(timeout=10)
+                    except Exception:
+                        pass
+                    self._append_chunk_failures(results, ch)
+                    status = "timeout"
+                elif pr.exitcode is not None and pr.exitcode < 0:
+                    _log.error("validate chunk %d child died (exitcode=%s) -> failures",
+                               i, pr.exitcode)
+                    self._append_chunk_failures(results, ch)
+                    status = "crash"
+                else:
+                    self._read_chunk_results(results, ch, rpath)
+                return (i, len(ch), status)
+            finally:
+                slot.release()
 
-        with ThreadPoolExecutor(max_workers=max(1, min(n_chunks, 8))) as pool:
-            for i, n_ch, status in pool.map(_collect_one, procs):
+        # Bounded consumption: a fixed-size worker pool + semaphore keep at most
+        # `max_concurrent` children alive concurrently, regardless of how many
+        # chunks there are. The pool threads block on the semaphore; a child is
+        # started only once a slot is free. This caps peak RSS at roughly
+        # max_concurrent × 200MB instead of n_chunks × 200MB. Results are
+        # consumed via as_completed (NOT pool.map) so progress advances as each
+        # chunk FINISHES — pool.map yields strictly in chunk order, which would
+        # stall the counter on a single slow early chunk (observed 2026-08-20).
+        with ThreadPoolExecutor(max_workers=max(1, min(n_chunks, self.max_concurrent))) as pool:
+            futs = {pool.submit(_collect_one, (i, chunks[i])): i
+                    for i in range(n_chunks)}
+            for fut in as_completed(futs):
+                i, n_ch, status = fut.result()
                 done += n_ch
                 if progress:
                     progress(done, n)
@@ -694,10 +730,12 @@ class StreamValidator:
             StreamValidator._scrub_failures(results, ch)
             return
         by_id = {getattr(s, "id", None): s for s in ch}
+        found = set()
         for d in data:
             s = by_id.get(d.get("id"))
             if s is None:
                 continue
+            found.add(d.get("id"))
             r = Result()
             r.url = d.get("url", "")
             r.ok = bool(d.get("ok"))
@@ -710,6 +748,16 @@ class StreamValidator:
             r.health_score = d.get("health_score")
             r.health_tier = d.get("health_tier")
             results.append((s, r))
+        # A child that died mid-write leaves a PARTIAL (but valid) JSON with
+        # fewer entries than the chunk. Those streams were never validated —
+        # record them as failures instead of silently dropping them from the
+        # run's stats and blacklist bookkeeping.
+        for s in ch:
+            if getattr(s, "id", None) not in found:
+                r = Result()
+                r.url = getattr(s, "original_url", "")
+                r.reason = "subprocess_crash"
+                results.append((s, r))
 
     @staticmethod
     def _scrub_failures(results, ch):
@@ -733,6 +781,8 @@ def _isolated_worker(cfg, config_dir, config_path, chunk_path, result_path, heal
             log_file=_lcfg.get("file"),
             json_format=bool(_lcfg.get("json_format", False)),
             log_write=bool(_lcfg.get("log_write", True)),
+            max_bytes=_lcfg.get("max_bytes"),
+            backup_count=_lcfg.get("backup_count"),
         )
     except Exception:
         pass
@@ -756,23 +806,45 @@ def _isolated_worker(cfg, config_dir, config_path, chunk_path, result_path, heal
 
         streams = [_S(d) for d in items]
         import time as _tmod
+        import threading as _threading
         from concurrent.futures import ThreadPoolExecutor as _TPE
         _chunk_t0 = _tmod.monotonic()
 
         def _one(s):
-            try:
-                return s, v.validate_one(s, health)
-            except Exception as e:  # noqa: BLE001
+            # Per-link HARD deadline in the child too: request timeouts reset on
+            # every byte, so a server that trickles 1 byte / few-seconds never
+            # trips them and would otherwise stall this chunk until the parent's
+            # chunk budget kills the whole child. A daemon thread + join bounds
+            # total per-link time regardless of where it stalls (DNS, TLS,
+            # trickle) — mirror of the parent's _run_one wrapper.
+            box = {}
+
+            def _target():
+                try:
+                    box["r"] = v.validate_one(s, health)
+                except Exception as e:  # noqa: BLE001
+                    box["e"] = e
+
+            t = _threading.Thread(target=_target, daemon=True)
+            t.start()
+            t.join(timeout=hard_timeout)
+            if t.is_alive():
                 r = Result()
-                r.reason = f"exc:{type(e).__name__}"
                 r.url = s.original_url
+                r.reason = f"hard_timeout_{int(hard_timeout)}s"
                 return s, r
+            if "e" in box:
+                r = Result()
+                r.url = s.original_url
+                r.reason = f"exc:{type(box['e']).__name__}"
+                return s, r
+            return s, box.get("r") or Result()
 
         out = []
         # The child is ALREADY an isolated process (a SEGV only kills this
-        # chunk); run validate_one concurrently with a real pool. No nested
-        # daemon-thread wrapper needed — the subprocess boundary contains SEGVs,
-        # and request timeouts bound each link.
+        # chunk); run validate_one concurrently with a real pool. Each link is
+        # still wrapped in a daemon-thread HARD deadline (_one) so slow-trickle
+        # hosts can't stall the chunk until the parent's budget kills it.
         with _TPE(max_workers=max(1, workers)) as ex:
             for s, res in ex.map(_one, streams):
                 out.append({
@@ -788,7 +860,7 @@ def _isolated_worker(cfg, config_dir, config_path, chunk_path, result_path, heal
                     "health_score": res.health_score,
                     "health_tier": res.health_tier,
                 })
-        _get_logger().info("isolated chunk validated n=%d in %.1fs",
+        _LOG.info("isolated chunk validated n=%d in %.1fs",
                            len(out), _tmod.monotonic() - _chunk_t0)
         with open(result_path, "w", encoding="utf-8") as f:
             json.dump(out, f)

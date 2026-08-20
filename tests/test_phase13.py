@@ -245,7 +245,7 @@ def test_regenerate_units_enable_not_enable_now(tmp_path, monkeypatch):
     assert any("m3u-processor-j1" in " ".join(c) for c in enables)
 
 
-def test_webui_run_discard_event(tmp_path):
+def test_webui_run_discard_event(tmp_path, monkeypatch):
     """Web UI: starting a run via API works; discard logic is tested via
     test_single_run_guard_discards_concurrent which directly tests the lock."""
     from fastapi.testclient import TestClient
@@ -261,6 +261,22 @@ def test_webui_run_discard_event(tmp_path):
     db.init_db(backup=False)
     db.close()
 
+    # ADR-011: /api/run now launches the run as a DETACHED systemd transient
+    # unit (m3u-web-<run_id>) instead of an in-process worker thread, so the
+    # validation's child processes live OUTSIDE the web service's MemoryMax
+    # cgroup. In tests we stub systemd-run to a no-op and drive the run to
+    # completion via the DB row (which is exactly what the detached process
+    # does), then assert the SSE endpoint streams the done event.
+    import subprocess as _sp
+
+    def _noop_systemd_run(*a, **kw):
+        class R:
+            returncode = 0
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(_sp, "run", _noop_systemd_run)
+
     import json as _j
     app = create_app(cfg)
     client = TestClient(app)
@@ -269,6 +285,23 @@ def test_webui_run_discard_event(tmp_path):
     assert r.status_code == 200
     run_id = r.json()["run_id"]
     import time as _t
+    # The detached CLI process would write progress + a final 'completed' row
+    # to the DB as it runs. Simulate that here so the API contract holds.
+    db = Database(str(tmp_path / "t.db"))
+    db.execute(
+        "INSERT INTO runs(run_id, mode, started_at, status, progress_json, stats_json) "
+        "VALUES(?,?,CURRENT_TIMESTAMP,'completed','{\"done\":3,\"total\":3}',"
+        "'{\"checked\":3,\"working\":3,\"failed\":0}')",
+        (run_id, "quick"),
+    )
+    db.commit()
+    db.close()
+    # SSE endpoint should stream the completed event from the DB row
+    with client.stream("GET", f"/api/events?run_id={run_id}") as resp:
+        assert resp.status_code == 200
+        body = "".join(resp.iter_text())
+    assert '"type": "done"' in body
+    assert run_id in body
     # Wait for run to complete
     for _ in range(50):
         rows = client.get("/api/runs").json()

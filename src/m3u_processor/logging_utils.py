@@ -4,10 +4,19 @@ All modules should call `from .logging_utils import get_logger` and use the
 returned logger instead of `print()` so that log level / file routing is
 consistent and observable. The web service and CLI both configure the root
 logger via `configure_logging()`.
+
+Config keys honored (config.yaml ``logging:`` section):
+  level        DEBUG/INFO/WARNING/ERROR  (root threshold)
+  log_write    False -> attach no handler at all (silent)
+  file         target log file (default stderr)
+  json_format  True -> pythonjsonlogger JSON formatter (falls back to plain)
+  max_bytes    rotation size for the file handler (0/unset -> no rotation)
+  backup_count  number of rotated files kept
 """
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import sys
 
@@ -22,7 +31,9 @@ def get_logger(name: str = "m3u") -> logging.Logger:
 
 
 def configure_logging(level: str | None = None, log_file: str | None = None,
-                       json_format: bool = False, log_write: bool = True) -> None:
+                       json_format: bool = False, log_write: bool = True,
+                       max_bytes: int | None = None,
+                       backup_count: int | None = None) -> None:
     """Configure the root logger once.
 
     level: DEBUG/INFO/WARNING/ERROR (default INFO).
@@ -31,6 +42,9 @@ def configure_logging(level: str | None = None, log_file: str | None = None,
         suppressed (config-driven, e.g. logging.log_write: false). Modules that
         already captured a reference to the root logger keep working, they just
         emit into the void.
+    max_bytes: rotation size for a RotatingFileHandler when log_file is set.
+        <=0 / None -> plain FileHandler (no rotation).
+    backup_count: number of rotated files retained (default 5).
     """
     global _CONFIGURED
     lvl = getattr(logging, (level or "INFO").upper(), logging.INFO)
@@ -46,7 +60,15 @@ def configure_logging(level: str | None = None, log_file: str | None = None,
         if log_file:
             try:
                 os.makedirs(os.path.dirname(log_file), exist_ok=True)
-                handler = logging.FileHandler(log_file, encoding="utf-8")
+                if max_bytes and int(max_bytes) > 0:
+                    handler = logging.handlers.RotatingFileHandler(
+                        log_file,
+                        maxBytes=int(max_bytes),
+                        backupCount=int(backup_count or 5),
+                        encoding="utf-8",
+                    )
+                else:
+                    handler = logging.FileHandler(log_file, encoding="utf-8")
             except OSError:
                 handler = logging.StreamHandler(sys.stderr)
         else:

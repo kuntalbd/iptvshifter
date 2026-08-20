@@ -140,6 +140,49 @@ def test_manifest_detected_from_url_extension():
     assert res.throughput_kbps is None
 
 
+def _fake_resp(content_type="video/mp2t"):
+    return type(
+        "R", (),
+        {"status_code": 200, "headers": {"Content-Type": content_type},
+         "close": lambda self: None})()
+
+
+def test_combined_health_media_weighted():
+    # Regression (review PASS1): regular/full mode on a NON-manifest media URL
+    # must combine latency + sampled throughput (weighted 40/60, worst tier
+    # wins). It used to call the nonexistent _sample_throughput() and crash
+    # with AttributeError inside validate_one -> reason="AttributeError" and
+    # health_score/health_tier always None for every media stream.
+    c = _cfg({"latency_check": True, "healthy_max_ms": 2000, "medium_max_ms": 5000,
+              "throughput_check": True, "throughput_sample_seconds": 1,
+              "throughput_min_kbps": 500})
+    v = validator.StreamValidator(c)
+    v._sample_throughput_raw = lambda url, headers: (None, 2000.0)  # >= min -> healthy
+    v._do_request = lambda method, url, headers: _fake_resp()
+    res = v.validate_one(_stream("http://e/media.ts?token=abc"), health=True)
+    assert res.ok, res.reason
+    assert res.reason == "", res.reason  # no AttributeError leaked into reason
+    assert res.throughput_kbps == 2000.0
+    assert res.health_tier == "healthy", res.health_tier
+    assert res.health_score is not None and res.health_score > 50
+
+
+def test_combined_health_slow_throughput_wins():
+    # Fast latency + slow throughput -> combined tier must be "slow" (worst
+    # dominates) and the weighted score must still be computed, not None.
+    c = _cfg({"latency_check": True, "healthy_max_ms": 2000, "medium_max_ms": 5000,
+              "throughput_check": True, "throughput_sample_seconds": 1,
+              "throughput_min_kbps": 500})
+    v = validator.StreamValidator(c)
+    v._sample_throughput_raw = lambda url, headers: (None, 100.0)  # < min -> slow
+    v._do_request = lambda method, url, headers: _fake_resp()
+    res = v.validate_one(_stream("http://e/media.ts"), health=True)
+    assert res.ok, res.reason
+    assert res.throughput_kbps == 100.0
+    assert res.health_tier == "slow", res.health_tier
+    assert res.health_score is not None
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

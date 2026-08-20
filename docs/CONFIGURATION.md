@@ -3,8 +3,13 @@
 > Every key in `config.yaml`, its default, and what it does. Precedence:
 > **CLI flag > environment (`M3U_*`) > config.yaml > built-in default** (§18.4).
 
-Copy `config.yaml.example` → `config.yaml` and edit. Unknown keys are ignored;
+Copy `examples/config.example.yaml` → `config.yaml` and edit. Unknown keys are ignored;
 missing keys fall back to built-in defaults.
+
+> **Dead keys (reserved, NOT read by code):** a few keys still ship in the
+> defaults and docs for forward-compatibility but are **ignored by the current
+> implementation** — marked 🔌 below. Removing them from `config.yaml` changes
+> nothing.
 
 ---
 
@@ -29,7 +34,7 @@ logging       # log file + level
 |-----|---------|-------|
 | `path` | `./data/m3u.db` | SQLite file. Parent dir auto-created. |
 | `backup_on_start` | `true` | gzip-copy DB before each run. |
-| `backup_keep` | `7` | Keep last N backups in `data/backups/`. |
+| `backup_keep` 🔌 | `7` | Reserved — backup pruning not yet implemented. |
 
 ---
 
@@ -38,8 +43,8 @@ logging       # log file + level
 |-----|---------|-------|
 | `feed_file` | `./feeds.txt` | One playlist URL or local path per line. |
 | `playlist_dir` | `./playlists` | Local `.m3u` files ingested on run. |
-| `recursive_scan` | `true` | Recurse into subdirs of `playlist_dir`. |
-| `file_patterns` | `["*.m3u","*.m3u8","*.txt"]` | Which files to ingest. |
+| `recursive_scan` 🔌 | `true` | Reserved — `playlist_dir` is always scanned recursively. |
+| `file_patterns` 🔌 | `["*.m3u","*.m3u8","*.txt"]` | Reserved — glob is hardcoded. |
 
 ---
 
@@ -49,9 +54,9 @@ logging       # log file + level
 | `dir` | `./output` | Where playlists are written. |
 | `working_filename` | `working` | Base name; `.m3u`/`.kodi.m3u`/`.tivimate.m3u` appended. |
 | `formats` | `["vlc","kodi","tivimate"]` | Which player variants to generate. |
-| `generate_aux_files` | `true` | Write the 3 variants. |
-| `sort_by` | `group_title` | `group_title` \| `name` \| `domain`. |
-| `uncategorized_label` | `Uncategorized` | Group for streams with no group-title. |
+| `generate_aux_files` 🔌 | `true` | Reserved — all listed `formats` are always written. |
+| `sort_by` 🔌 | `group_title` | Reserved — output is always sorted by group then name. |
+| `uncategorized_label` 🔌 | `Uncategorized` | Reserved — label is fixed in writers. |
 
 Only `enabled` + (`is_working` OR `uncheckable`) + `blacklist_tier='none'`
 streams are included (§7.1). Output is **categorized into a single file** with
@@ -64,17 +69,17 @@ streams are included (§7.1). Output is **categorized into a single file** with
 |-----|---------|-------|
 | `mode` | `quick` | Default mode if `run` is called without `--mode`. |
 | `workers` | `20` | Concurrent validation threads. |
-| `max_workers` | `50` | Hard cap. |
+| `max_workers` 🔌 | `50` | Reserved — `workers` is the effective cap. |
 | `timeout_connect` | `10` | Seconds to establish TCP/TLS. |
 | `timeout_read` | `15` | Seconds to receive first bytes. |
 | `retries` | `2` | Retries on 5xx/timeout only (4xx = deterministic, no retry). |
-| `backoff` | `[2,4,8]` | Seconds between retries. |
+| `backoff` | `[5,15,30]` | Seconds between retries. |
 | `per_host_limit` | `5` | Max concurrent requests per host (§4.3). |
-| `user_agent_rotation` | `true` | Rotate UA pool per stream. |
+| `user_agent_rotation` 🔌 | `true` | Reserved — UA pool rotation is hardcoded. |
 | `follow_redirects` | `true` | Follow up to `max_redirects`. |
-| `max_redirects` | `5` | Redirect cap. |
+| `max_redirects` 🔌 | `5` | Reserved — redirects are followed without a hard cap. |
 | `verify_ssl` | `true` | Set `false` only if a proxy MITMs TLS. |
-| `token_refresh` | `true` | C1 HYBRID: on 403 of a tokened URL, re-extract a fresh token from the local source and re-validate before blacklisting. OFF in `quick` mode. |
+| `token_refresh` 🔌 | `true` | Reserved — token re-extraction is a dedicated `--mode refresh`, not a per-run toggle. |
 | `max_token_refetch_per_feed` | `1` | Cap remote re-fetches per source per run. |
 | `strip_query_params` | `[token,sig,signature,sign,token2,auth,expires,md5,hmac,nonce,ts,key,hdnea]` | Rotating-token params stripped from the **dedupe key only**. |
 
@@ -91,7 +96,7 @@ streams are included (§7.1). Output is **categorized into a single file** with
 | `permanent_inactive_days` | `30` | Days inactive → `permanent`. |
 | `permanent_failure_threshold` | `10` | Total failures (no `last_working`) → `permanent` (F26). |
 | `escalate_enabled` | `true` | Allow tier escalation. |
-| `purge_unchecked_days` | `90` | Delete streams never validated after N days. |
+| `purge_unchecked_days` | `90` | Purge streams not validated after N days (runs at the end of every run; `0` disables). |
 
 State machine: `none → short → permanent`. A stream with a known `last_working`
 date escalates more slowly; one **never worked** hits permanent at
@@ -103,7 +108,7 @@ date escalates more slowly; one **never worked** hits permanent at
 | Key | Default | Notes |
 |-----|---------|-------|
 | `aggregate_subdomains` | `true` | `cdn.x.com` + `x.com` → one provider `x.com`. |
-| `auto_create` | `true` | Discover providers from stream domains automatically. |
+| `auto_create` 🔌 | `true` | Reserved — providers are always auto-created from stream domains. |
 
 Disable a whole provider: `disable-provider example.com` or the Providers page.
 
@@ -180,7 +185,7 @@ categories:
   genre:
     News: ["news", "বার্তা", "cnn", "bbc", "aljazeera", "সংবাদ"]
     Sports: ["sports", "cricket", "football", "খেলা"]
-    # ... (see config.yaml.example for the full list)
+    # ... (see examples/config.example.yaml for the full list)
   country:
     Bangladesh: ["bangla", "bangladesh", "bd", "bdix", "বাংলা", "টিভি"]
     India: ["india", "hindi", "tamil", "desi"]
@@ -195,7 +200,7 @@ categories:
 | `enabled` | `true` | Start UI on `serve`. |
 | `host` | `0.0.0.0` | Bind address. Override with `serve --host`. |
 | `port` | `50152` | **Bind port.** Override with `serve --port`. Precedence: CLI flag > this > 50152. |
-| `auth_token_file` | `./webui_token.txt` | Optional bearer token file for the UI (if present, API requires it). |
+| `auth_token_file` | `./webui_token.txt` | If the file exists with a non-empty token, every `/api/*` request must present it (`Authorization: Bearer <token>`, `X-Auth-Token`, `?token=`, or `m3u_token` cookie) or gets **401**. Absent file / empty = no auth. Rotate by editing the file (no restart). |
 
 ```yaml
 webui:

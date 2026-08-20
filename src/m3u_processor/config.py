@@ -10,6 +10,10 @@ import yaml
 from dataclasses import dataclass, field
 from typing import Any
 
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.config")
+
 # Maps env var name -> dotted config path
 ENV_MAP = {
     "M3U_DB_PATH": "database.path",
@@ -234,6 +238,9 @@ def load_config(
         with open(path, "r", encoding="utf-8") as f:
             file_cfg = yaml.safe_load(f) or {}
         cfg = _deep_merge(cfg, file_cfg)
+        _LOG.debug("config file loaded path=%s", path)
+    else:
+        _LOG.debug("config file not found path=%s (using defaults)", path)
 
     # 2) environment (M3U_*)
     env = env if env is not None else os.environ
@@ -247,12 +254,14 @@ def load_config(
                     current = None
                     break
             _set_path(cfg, dotted, _coerce(env[env_key], current))
+            _LOG.debug("config env override %s -> %s", env_key, dotted)
 
     # 3) CLI overrides (dotted keys)
     for dotted, value in (cli_overrides or {}).items():
         if value is None:
             continue
         _set_path(cfg, dotted, value)
+        _LOG.debug("config cli override %s -> %s", dotted, value)
 
     # 4) Anchor relative path keys to the config file's directory. This makes
     #    the project relocatable: move the folder, keep config.yaml as the
@@ -270,8 +279,9 @@ def load_config(
         if ok and isinstance(node, str) and node and not os.path.isabs(node):
             _set_path(cfg, dotted, os.path.normpath(os.path.join(base, node)))
 
+    _LOG.info("config loaded path=%s db=%s mode=%s", path or "(defaults)",
+              cfg.get("database.path"), cfg.get("validation.mode"))
     return Config(_data=cfg, config_dir=config_dir, config_path=path or "")
-
 
 def save_config(cfg: "Config", path: str = None):
     """Persist a Config back to disk. If `path` is None, uses cfg.config_path."""

@@ -17,6 +17,10 @@ import os
 import re
 import sys
 
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.deploy")
+
 SERVICE_TMPL = """[Unit]
 Description=M3U Playlist Processor — {job} ({mode} mode)
 After=network-online.target
@@ -164,6 +168,7 @@ def generate(user="m3u", workdir="/opt/m3u-processor", config="./config.yaml",
     with open(os.path.join(outdir, "m3u-processor-web.service"), "w") as f:
         f.write(web)
     paths["m3u-processor-web.service"] = os.path.join(outdir, "m3u-processor-web.service")
+    _LOG.info("deploy units generated outdir=%s units=%s", outdir, list(paths.keys()))
     return list(paths.keys())
 
 

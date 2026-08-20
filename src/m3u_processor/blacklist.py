@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.blacklist")
+
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -36,6 +40,8 @@ def apply_result(stream, ok: bool, suspected_expired: bool, cfg, run_id="",
             stream.blacklist_tier = "none"
             stream.blacklisted_at = None
             stream.blacklist_reason = ""
+            _LOG.info("blacklist recovery stream_id=%s event=%s",
+                      stream.id, transition["event"])
         stream.consecutive_failures = 0
         stream.consecutive_pass += 1
         stream.total_pass += 1
@@ -62,6 +68,8 @@ def apply_result(stream, ok: bool, suspected_expired: bool, cfg, run_id="",
                 stream.blacklist_tier = "permanent"
                 stream.blacklisted_at = _now_iso()
                 stream.blacklist_reason = f"inactive {days}d"
+                _LOG.warning("blacklist escalated stream_id=%s inactive=%dd",
+                             stream.id, days)
                 return transition
         except Exception:
             pass
@@ -75,6 +83,8 @@ def apply_result(stream, ok: bool, suspected_expired: bool, cfg, run_id="",
         stream.blacklist_tier = "permanent"
         stream.blacklisted_at = _now_iso()
         stream.blacklist_reason = f"never worked, {stream.total_failures} fails"
+        _LOG.warning("blacklist permanent_added stream_id=%s fails=%d",
+                     stream.id, stream.total_failures)
         return transition
 
     # short threshold
@@ -84,6 +94,8 @@ def apply_result(stream, ok: bool, suspected_expired: bool, cfg, run_id="",
         stream.blacklist_tier = "short"
         stream.blacklisted_at = _now_iso()
         stream.blacklist_reason = f"{stream.consecutive_failures} consecutive fails"
+        _LOG.info("blacklist short_added stream_id=%s fails=%d",
+                  stream.id, stream.consecutive_failures)
         return transition
 
     # permanent via inactive days even if last_working set (direct)
@@ -97,12 +109,17 @@ def apply_result(stream, ok: bool, suspected_expired: bool, cfg, run_id="",
                 stream.blacklist_tier = "permanent"
                 stream.blacklisted_at = _now_iso()
                 stream.blacklist_reason = f"inactive {days}d"
+                _LOG.warning("blacklist permanent_added stream_id=%s inactive=%dd",
+                             stream.id, days)
                 return transition
         except Exception:
             pass
 
     transition["event"] = "failure_counted"
     transition["new_tier"] = stream.blacklist_tier
+    _LOG.debug("blacklist stream_id=%s old=%s new=%s fails=%d event=%s",
+               stream.id, old_tier, stream.blacklist_tier,
+               stream.total_failures, transition["event"])
     return transition
 
 
@@ -129,20 +146,32 @@ def escalate_short_to_permanent(db, cfg, run_id=""):
         except Exception:
             pass
     db.commit()
+    _LOG.info("escalate_short_to_permanent escalated=%d", escalated)
     return escalated
 
 
 def purge_old(db, cfg, run_id=""):
-    """Remove streams not checked in `purge_unchecked_days` (§5.3)."""
+    """Remove streams not checked in `purge_unchecked_days` (§5.3).
+
+    Returns the number of streams deleted. Skipped entirely when the threshold
+    is <= 0 (operator opted out).
+    """
     days = int(cfg.get("blacklist.purge_unchecked_days", 90))
-    db.execute(
+    if days <= 0:
+        _LOG.info("purge_old skipped (purge_unchecked_days=%s)", days)
+        return 0
+    cur = db.execute(
         "DELETE FROM streams WHERE last_checked IS NULL AND first_seen < "
         "datetime('now', ?)",
         (f"-{days} days",),
     )
-    db.execute(
+    removed = cur.rowcount
+    cur2 = db.execute(
         "DELETE FROM streams WHERE last_checked IS NOT NULL AND last_checked < "
         "datetime('now', ?)",
         (f"-{days} days",),
     )
+    removed += cur2.rowcount
     db.commit()
+    _LOG.info("purge_old removed %d streams not checked in %dd", removed, days)
+    return removed

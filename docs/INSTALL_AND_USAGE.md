@@ -34,7 +34,7 @@ you skipped the install.
 
 ### Create your config + feeds
 ```bash
-cp config.yaml.example config.yaml     # then edit (see CONFIGURATION.md)
+cp examples/config.example.yaml config.yaml   # then edit (see CONFIGURATION.md)
 cp feeds.txt.example feeds.txt         # one playlist URL per line
 mkdir -p data output playlists
 ```
@@ -61,24 +61,29 @@ Then open `http://<host>:50152/`.
 | Command | Purpose | Key flags |
 |---------|---------|-----------|
 | `init-db` | Create DB schema + pragmas + gzip backup helper | — |
-| `run` | Ingest sources + validate streams (§3) | `--mode quick\|regular\|full`, `--config PATH`, `--no-token-refresh` |
-| `generate-output` | Write player playlists (§7.1) | `--formats vlc,kodi,tivimate`, `--output-dir DIR` |
+| `run` | Ingest sources + validate streams (§3) | `--mode quick\|regular\|full\|refresh`, `--config PATH` |
+| `generate-output` | Write player playlists (§7.1) | `--formats vlc,kodi,tivimate`, `--out BASE` (or global `--output-dir DIR` before the subcommand) |
 | `list-feeds` | Show configured feed sources | — |
 | `add-feed URL` | Append a playlist URL to `feeds.txt` | — |
 | `list-providers` | List discovered provider domains + state | — |
 | `enable-provider DOMAIN` / `disable-provider DOMAIN` | Toggle a provider (§6.2) | — |
 | `stats` | DB summary (counts, tiers, last run) | — |
-| `blacklist --list [--tier permanent]` | Show blacklisted streams | `--tier short\|permanent`, `--unban ID` |
+| `blacklist` | Show blacklisted streams (blacklist tier) | `--tier short\|permanent` (default permanent) |
 | `serve` | Start FastAPI web UI (§11) | `--host`, `--port` (both **configurable**, see §5) |
 | `--version` / `--help` | Version / help | — |
 
 ### `run` modes (§3)
-- `quick` — re-check only recently-changed / never-validated + uncheckable;
-  token-refresh OFF (fast, low-traffic).
-- `regular` — re-check all eligible (working/uncheckable, tier=none/short);
-  token-refresh ON (C1 hybrid).
-- `full` — re-check EVERYTHING including permanent-blacklisted (rehabilitation
-  attempt); token-refresh ON.
+- `quick` — latency-only health (throughput sampling OFF) over all enabled
+  streams not permanently blacklisted (tier=none, incl. unverified). Fast,
+  low-traffic.
+- `regular` — full health scoring (latency + 3s throughput sampling) over all
+  enabled tier=none **and** short streams (re-check + rehab).
+- `full` — everything enabled, including permanent-blacklisted (rehabilitation
+  attempt).
+- `refresh` — **token re-extraction only** for tokened working streams (C1
+  hybrid); no active/health check. This is the ONLY mode that rotates tokens;
+  `quick`/`regular`/`full` just validate and leave expired tokens to the next
+  refresh run.
 
 ### Output is categorized (single file)
 `generate-output` writes **one file per format**, but inside each file streams
@@ -105,17 +110,17 @@ buffering channels:
 # ingest a one-off playlist without touching feeds.txt
 m3u-processor run --mode regular
 
-# disable token refresh (e.g. for cheap nightly quick runs)
-m3u-processor run --mode quick --no-token-refresh
+# token refresh is a dedicated mode, not a run flag:
+#   run --mode refresh   # re-extract tokens only (scheduled every 2h)
 
-# generate only VLC + TiviMate, to a custom dir
-m3u-processor generate-output --formats vlc,tivimate --output-dir /mnt/usb/playlists
+# generate only VLC + TiviMate, to a custom base file
+m3u-processor generate-output --formats vlc,tivimate --out /mnt/usb/playlists/working.m3u
 
 # ban a bad provider entirely
 m3u-processor disable-provider bad-cdn.example
 
-# unban a stream that came back
-m3u-processor blacklist --unban 4821
+# list streams blacklisted permanently
+m3u-processor blacklist --tier permanent
 ```
 
 ---
@@ -144,7 +149,7 @@ Live run progress streams over SSE to the Run page.
 # on the Pi, as root:
 export WORKDIR=/opt/m3u-processor
 mkdir -p $WORKDIR && cp -r . $WORKDIR/
-cp config.yaml.example $WORKDIR/config.yaml   # edit DB path, port, feeds
+cp examples/config.example.yaml $WORKDIR/config.yaml   # edit DB path, port, feeds
 cd $WORKDIR
 pip install -e .
 sudo ./scripts/install.sh        # generates + enables systemd units

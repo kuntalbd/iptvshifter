@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from .utils import extract_domain
+from .logging_utils import get_logger as _get_logger
+
+_LOG = _get_logger("m3u.providers")
 
 
 def ensure_provider(db, domain: str, aggregate_subdomains: bool = True):
@@ -16,6 +19,7 @@ def ensure_provider(db, domain: str, aggregate_subdomains: bool = True):
             (dom,),
         )
         db.commit()
+        _LOG.debug("provider auto-created domain=%s", dom)
         return True
     return bool(row[0]["enabled"])
 
@@ -35,6 +39,8 @@ def set_provider_enabled(db, domain: str, enabled: bool, reason="", by=""):
         (domain, "provider_enabled" if enabled else "provider_disabled", reason, by),
     )
     db.commit()
+    _LOG.info("provider %s -> %s by=%s reason=%s",
+              domain, "enabled" if enabled else "disabled", by, reason)
 
 
 def provider_enabled(db, stream) -> bool:

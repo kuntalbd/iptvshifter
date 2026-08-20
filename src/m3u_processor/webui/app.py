@@ -22,10 +22,8 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import signal
 import subprocess
-import threading
 import time
 
 from fastapi import FastAPI, Request, HTTPException
@@ -47,9 +45,12 @@ HERE = Path(__file__).resolve().parent
 TEMPLATES_DIR = HERE / "templates"
 STATIC_DIR = HERE / "static"
 
-# Event bus for SSE progress per run
-_RUN_EVENTS = {}
-_RUN_LOCK = threading.Lock()
+# Run ids this web process has launched as detached subprocesses. Kept so
+# /api/events can 404 on a TRULY unknown run_id while still streaming for a
+# freshly launched one whose DB row only appears after the detached CLI process
+# starts (the row is inserted a moment after launch). A bounded dict keyed by
+# run_id -> launch time; pruned lazily.
+_LAUNCHED_RUNS = {}
 
 
 def _pid_alive(pid):
@@ -313,7 +314,20 @@ def create_app(cfg):
                     stopped = True
                 except Exception:
                     pass
-            # Mark stop-requested for the in-process worker thread (best effort).
+            # Web-spawned runs live in a detached systemd transient unit
+            # (m3u-web-<run_id>) so the validation's child processes are OUTSIDE
+            # this service's MemoryMax cgroup. Stop that unit directly; the
+            # Orchestrator's SIGTERM handler finalizes the DB row as 'stopped'.
+            if run_id.startswith("web-"):
+                unit = f"m3u-web-{run_id}"
+                try:
+                    subprocess.run(["systemctl", "--user", "stop", unit],
+                                   capture_output=True, timeout=15)
+                    stopped = True
+                except Exception:
+                    pass
+            # Mark stop-requested (best effort; the SIGTERM handler also covers
+            # the DB finalize path).
             try:
                 db.execute(
                     "UPDATE runs SET status='stopping' WHERE run_id=?", (run_id,)
@@ -657,7 +671,7 @@ def create_app(cfg):
 
     @app.post("/api/run")
     async def api_run(req: Request):
-        from ..orchestrator import Orchestrator
+        import sys as _sys
         body = await _json_body(req)
         job_name = body.get("job")
         mode = body.get("mode", cfg.get("validation.mode", "quick"))
@@ -666,11 +680,8 @@ def create_app(cfg):
             job = next((j for j in jobs if j.get("name") == job_name), None)
             if job:
                 mode = job.get("mode", mode)
-        q = queue.Queue()
 
         _LOG.info("api_run requested mode=%s job=%s", mode, job_name)
-        def progress(done, total):
-            q.put({"type": "progress", "done": done, "total": total})
 
         # Stable web-side run id used both for SSE and DB row (passed to the
         # Orchestrator so the discard reason / live lookups line up). Uses a
@@ -679,72 +690,114 @@ def create_app(cfg):
         # restarted mid-run — api_run_status keys off the DB row, not a pid.
         run_id = f"web-{mode}-{int(time.time()*1000)}-{os.urandom(3).hex()}"
 
-        # Orchestrator + its DB live entirely in the worker thread (sqlite
-        # connections are not thread-safe).
-        def worker():
-            from ..database import Database as _DB
-            from pathlib import Path as _P
-            db = _DB(cfg.get("database.path"))
-            db.init_db(backup=False)
-            orch = Orchestrator(db, cfg)
-            orch.progress = progress
-            try:
-                # Ingest configured sources first (mirrors the CLI `run` path),
-                # so a UI run on an empty DB actually populates streams instead
-                # of validating nothing. (TC-2 fix: Web UI previously skipped
-                # ingest and only re-validated existing rows.)
-                if mode != "refresh":
-                    feed_file = cfg.get("sources.feed_file")
-                    if feed_file and _P(feed_file).is_file():
-                        for line in open(feed_file):
-                            line = line.strip()
-                            if line and not line.startswith("#"):
-                                try:
-                                    orch.ingest_feed(line)
-                                except Exception as e:
-                                    _LOG.warning("api_run ingest_feed failed: %s", e)
-                    pdir = cfg.get("sources.playlist_dir")
-                    if pdir and _P(pdir).is_dir():
-                        for f in sorted(_P(pdir).glob("*.m3u*")):
-                            try:
-                                orch.ingest_source(str(f))
-                            except Exception as e:
-                                _LOG.warning("api_run ingest_source failed: %s", e)
-                stats = orch.run(mode=mode, run_id=run_id)
-                if stats.get("discarded"):
-                    q.put({"type": "discarded",
-                            "reason": stats.get("discard_reason", "another run active"),
-                            "run_id": orch.run_id})
-                else:
-                    q.put({"type": "done", "stats": stats, "run_id": orch.run_id})
-            except Exception as e:
-                q.put({"type": "error", "message": str(e)})
-            finally:
-                db.close()
-
-        t = threading.Thread(target=worker, daemon=True)
-        t.start()
-        with _RUN_LOCK:
-            _RUN_EVENTS[run_id] = q
+        # Run the orchestration in a DETACHED systemd transient unit, NOT in a
+        # worker thread of this web process. The web service's systemd unit is
+        # capped at MemoryMax=400M; a run that spawns N isolated validator
+        # children (~200MB each) inside that cgroup trips the kernel OOM killer
+        # (see 2026-08-19 OOM-kill of m3u-processor-web.service). A transient
+        # unit is a SIBLING of this service in the cgroup tree (no inherited
+        # cap), so the validation runs to completion and only the final publish
+        # result is reported back. Progress is surfaced via the DB `runs` row,
+        # which /api/events polls.
+        cfg_path = getattr(cfg, "config_path", None) or "config.yaml"
+        cmd = [_sys.executable, "-m", "m3u_processor", "--config", cfg_path,
+               "run", "--mode", mode, "--run-id", run_id]
+        try:
+            launch = subprocess.run(
+                ["systemd-run", "--user", "--unit", f"m3u-web-{run_id}",
+                 "--collect", "--quiet", "--", *cmd],
+                capture_output=True, text=True, timeout=20,
+            )
+            if launch.returncode != 0:
+                _LOG.warning("api_run systemd-run failed: %s",
+                             launch.stderr.strip()[:200])
+                return {"run_id": run_id, "mode": mode,
+                        "error": "systemd-run failed: "
+                                 + launch.stderr.strip()[:200]}
+        except FileNotFoundError:
+            # systemd-run unavailable (bare container) — fall back to a plain
+            # detached process. Note: this child inherits THIS service's cgroup
+            # (and thus its MemoryMax), so the fallback is best-effort only.
+            subprocess.Popen(cmd, start_new_session=True,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        _LOG.info("api_run launched run_id=%s mode=%s unit=m3u-web-%s",
+                  run_id, mode, run_id)
+        _LAUNCHED_RUNS[run_id] = time.time()
+        # lazy prune: drop entries older than 1 day (keeps the dict bounded)
+        now = time.time()
+        for _rid, ts in list(_LAUNCHED_RUNS.items()):
+            if now - ts > 86400:
+                del _LAUNCHED_RUNS[_rid]
         return {"run_id": run_id, "mode": mode}
 
     @app.get("/api/events")
     def api_events(run_id: str):
-        with _RUN_LOCK:
-            q = _RUN_EVENTS.get(run_id)
-        if q is None:
+        # 404 on a run this web process never launched (bounded in-memory
+        # registry) and that has no DB row yet — matches the pre-ADR-011
+        # contract where unknown run_ids errored immediately instead of
+        # streaming pings forever.
+        db = _get_db(cfg)
+        try:
+            has_row = bool(db.query(
+                "SELECT 1 FROM runs WHERE run_id=?", (run_id,)
+            ))
+        finally:
+            db.close()
+        if not has_row and run_id not in _LAUNCHED_RUNS:
             raise HTTPException(404, "unknown run_id")
 
         def gen():
+            last_progress = None
             while True:
+                db = _get_db(cfg)
                 try:
-                    evt = q.get(timeout=30)
-                except queue.Empty:
-                    yield "data: " + json.dumps({"type": "ping"}) + "\n\n"
-                    continue
-                yield "data: " + json.dumps(evt) + "\n\n"
-                if evt["type"] in ("done", "error"):
+                    row = db.query(
+                        "SELECT status, progress_json, stats_json, error_message "
+                        "FROM runs WHERE run_id=?", (run_id,)
+                    )
+                    if not row:
+                        yield "data: " + json.dumps({"type": "ping"}) + "\n\n"
+                        time.sleep(2)
+                        continue
+                    r = row[0]
+                    status = r["status"]
+                    # stream progress only when it changed
+                    prog_raw = r["progress_json"] or "{}"
+                    try:
+                        prog = json.loads(prog_raw)
+                    except Exception:
+                        prog = {}
+                    if prog.get("done") is not None and prog_raw != last_progress:
+                        last_progress = prog_raw
+                        yield "data: " + json.dumps({
+                            "type": "progress",
+                            "done": prog.get("done", 0),
+                            "total": prog.get("total", 0),
+                        }) + "\n\n"
+                    if status == "discarded":
+                        stats = json.loads(r["stats_json"] or "{}")
+                        yield "data: " + json.dumps({
+                            "type": "discarded",
+                            "reason": stats.get("discard_reason",
+                                                "another run active"),
+                            "run_id": run_id,
+                        }) + "\n\n"
+                        break
+                    if status in ("completed", "stopped", "failed", "error"):
+                        stats = json.loads(r["stats_json"] or "{}")
+                        yield "data: " + json.dumps({
+                            "type": "done", "stats": stats, "run_id": run_id,
+                            "status": status,
+                        }) + "\n\n"
+                        break
+                except Exception as e:  # noqa: BLE001
+                    yield "data: " + json.dumps({"type": "error",
+                                                 "message": str(e)}) + "\n\n"
                     break
+                finally:
+                    db.close()
+                time.sleep(1)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
