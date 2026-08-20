@@ -240,7 +240,8 @@ run_errors, blacklist_events, enable_events  -- audit logs
 - **ADR-016 (web UI consolidation)**: all page templates share one
   `static/app.js` (helpers: `esc`, `toast`, `fmtDate/fmtTime/fmtDur`,
   `apiFetch`/`apiGet`/`apiPost`, `debounce`, batch-selection) and one
-  `style.css` (CSS variables; no per-page `<style>` blocks, no hardcoded hex).
+  `style.css` (CSS variables; no per-page `<style>` blocks; the color palette is
+  a centralized `--pico-*` override block in style.css — see ADR-017).
   Pages use `{% block content %}` + `{% block scripts %}` from `base.html`.
   `apiFetch` attaches the bearer token from `localStorage['m3u_token']` and,
   on 401, prompts for the token once — so UI pages keep working after
@@ -258,8 +259,9 @@ run_errors, blacklist_events, enable_events  -- audit logs
   `base.html` provides a sticky top nav with active-state highlighting
   (`{% block body_attr %} data-page="..."`), page-head/toolbar furniture, and
   `data-table`/`.table-wrap` markup. Result: streams, providers, blacklist,
-  favorites, errors and schedules all use `DataTable` (sort/filter/search/
-  paginate identically); dashboard/run/runs/live/settings share the same
+  favorites, errors and schedules use DataTable's client-side sort/filter/search/
+  paginate; providers uses DataTable for display with a server-side pager + search
+  (deep-link `?search=` honored); dashboard/run/runs/live/settings share the same
   page-head + furniture. `/api/streams` now also returns `blacklist_reason`
   so the blacklist page shows reasons (previously the field was missing from
   the SELECT and the column rendered empty).

@@ -33,6 +33,7 @@
 </div>
 
 <div id="providers-slot"></div>
+<div id="providers-pager" class="pagination"></div>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -101,7 +102,7 @@ const table = new DataTable({
 });
 
 function renderPager() {
-  const el = document.querySelector('#providers-slot .pagination');
+  const el = document.querySelector('#providers-pager');
   if (!el || !_pager) return;
   const totalPages = _pager.totalPages;
   if (totalPages <= 1) { el.innerHTML = ''; return; }
@@ -136,6 +137,10 @@ function enable(btn) {
 document.getElementById('providerSearch').addEventListener('input', debounce(() => { _currentPage = 1; table.reload(); }, 300));
 document.getElementById('filterState').addEventListener('change', () => { _currentPage = 1; table.reload(); });
 document.getElementById('sortBy').addEventListener('change', () => { _currentPage = 1; table.reload(); });
+if (location.search) {
+  const ps = new URLSearchParams(location.search);
+  if (ps.get('search')) document.getElementById('providerSearch').value = ps.get('search');
+}
 table.reload();
 </script>
 {% endblock %}
