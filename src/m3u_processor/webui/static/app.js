@@ -415,6 +415,7 @@ class DataTable {
   }
 
   _renderPagination(total, pages) {
+    if (!this.o.pageSize) return; // pageSize 0: no client pagination (providers uses its own pager)
     let el = this.el.querySelector(".pagination");
     if (!el) {
       el = document.createElement("div");
