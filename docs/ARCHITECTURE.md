@@ -237,6 +237,15 @@ run_errors, blacklist_events, enable_events  -- audit logs
   the orchestrator's real OS pid in `stats_json` so the reaper can
   liveness-probe web runs (hex-suffixed run_ids carry no pid) instead of
   wrongly marking an active run 'stopped'.
+- **ADR-016 (web UI consolidation)**: all page templates share one
+  `static/app.js` (helpers: `esc`, `toast`, `fmtDate/fmtTime/fmtDur`,
+  `apiFetch`/`apiGet`/`apiPost`, `debounce`, batch-selection) and one
+  `style.css` (CSS variables; no per-page `<style>` blocks, no hardcoded hex).
+  Pages use `{% block content %}` + `{% block scripts %}` from `base.html`.
+  `apiFetch` attaches the bearer token from `localStorage['m3u_token']` and,
+  on 401, prompts for the token once — so UI pages keep working after
+  `auth_token_file` is enabled (SSE `/api/events` passes the token via
+  `?token=`, since EventSource cannot set headers).
 
 ---
 
