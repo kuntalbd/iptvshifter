@@ -45,8 +45,8 @@ const table = new DataTable({
     { key: 'name', label: 'Name', render: (r) => `<strong>${esc(r.name)}</strong>` },
     { key: 'mode', label: 'Mode', render: (r) => `<span class="pill run">${esc(r.mode)}</span>` },
     { key: 'cron', label: 'Cron', render: (r) => `<code>${esc(r.cron)}</code>` },
-    { key: '_next', label: 'Next run', render: () => `<span class="muted">—</span>` },
-    { key: '_action', label: '', sortable: false, render: (r) => `<button class="btn" onclick="delJob('${esc(r.name)}')">Remove</button>` },
+    { key: '_next', label: 'Next run', sortable: false, render: () => `<span class="muted">—</span>` },
+    { key: '_action', label: '', sortable: false, render: (r) => `<button class="btn" data-name="${esc(r.name)}" onclick="delJob(this.dataset.name)">Remove</button>` },
   ],
   fetch: () => apiGet('/api/scheduler').then(d => { _jobs = d.jobs || []; return _jobs; }),
   emptyText: 'no scheduled jobs',
@@ -58,8 +58,8 @@ async function saveJob() {
   const cron = document.getElementById('j_cron').value.trim();
   if (!name) { document.getElementById('msg').textContent = 'Name required'; return; }
   const d = await apiPost('/api/scheduler', { name, mode, cron });
-  document.getElementById('msg').textContent = JSON.stringify(d);
-  toast(d.ok ? 'Job saved' : 'Failed to save', d.ok);
+  document.getElementById('msg').textContent = d.detail || JSON.stringify(d);
+  toast(d.ok ? 'Job saved' : (d.detail || 'Failed to save'), !!d.ok);
   table.reload();
 }
 async function delJob(name) {

@@ -116,7 +116,7 @@ function toggleFav(streamId) {
   apiPost('/api/favorites/toggle', { url: r.url }).then(d => {
     if (d.ok) {
       toast(d.action === 'added' ? '★ Added to favorites' : '☆ Removed from favorites');
-      table.reload();
+      table.reload().then(() => { const fresh = _rows.find(x => x.id === streamId); if (fresh) showDetail(fresh); });
     } else toast('error: ' + (d.error || ''), false);
   });
 }
@@ -124,14 +124,14 @@ function toggleFav(streamId) {
 function batchAddFavorite() {
   const urls = selectedUrls(); if (!urls.length) return;
   apiPost('/api/favorites/batch-add', { urls }).then(d => {
-    toast(d.ok ? `★ ${d.added} added to favorites` : ('error: ' + (d.error || '')));
+    toast(d.ok ? `★ ${d.added} added to favorites` : ('error: ' + (d.error || '')), d.ok);
     table.reload();
   });
 }
 function batchRemoveFavorite() {
   const ids = selectedFavIds(); if (!ids.length) return toast('No favorites selected', false);
   apiPost('/api/favorites/batch-remove', { ids }).then(d => {
-    toast(d.ok ? `☆ ${d.removed} removed from favorites` : ('error: ' + (d.error || '')));
+    toast(d.ok ? `☆ ${d.removed} removed from favorites` : ('error: ' + (d.error || '')), d.ok);
     table.reload();
   });
 }
@@ -141,7 +141,7 @@ function batchSetBlacklist() {
   if (!ids.length) return toast('select streams first', false);
   if (!tier) return toast('select a tier', false);
   apiPost('/api/streams/batch-blacklist', { ids, tier }).then(d => {
-    toast(d.ok ? `Updated ${d.updated} streams to ${tier}` : ('error: ' + (d.error || '')));
+    toast(d.ok ? `Updated ${d.updated} streams to ${tier}` : ('error: ' + (d.error || '')), d.ok);
     table.reload();
   });
 }
@@ -163,7 +163,7 @@ function showDetail(r) {
     <div class="urlbox"><code>${esc(r.original_url || r.url)}</code>
       <button onclick="copyUrl(this)">copy</button></div>
     <div class="row-actions">
-      <button class="btn" onclick="toggleFav(${r.id});showDetail(${r.id})">${r.is_favorite ? '☆ Remove favorite' : '★ Add favorite'}</button>
+      <button class="btn" onclick="toggleFav(${r.id})">${r.is_favorite ? '☆ Remove favorite' : '★ Add favorite'}</button>
       <button class="btn" onclick="disableProvider(${r.id})">disable provider</button>
       <button class="btn" onclick="document.getElementById('detail').classList.add('hidden')">close</button>
     </div>`;
@@ -175,7 +175,10 @@ function copyUrl(btn) {
 function disableProvider(streamId) {
   const r = _rows.find(x => x.id === streamId); if (!r) return;
   if (!confirmDialog('Disable provider ' + r.provider_domain + '?')) return;
-  apiPost('/api/provider/disable', { domain: r.provider_domain, reason: 'web' }).then(() => { toast('disabled ' + r.provider_domain); table.reload(); });
+  apiPost('/api/provider/disable', { domain: r.provider_domain, reason: 'web' }).then(() => {
+    toast('disabled ' + r.provider_domain);
+    table.reload().then(() => { const fresh = _rows.find(x => x.id === streamId); if (fresh) showDetail(fresh); });
+  });
 }
 
 document.getElementById('batch-add-fav').addEventListener('click', batchAddFavorite);
@@ -195,7 +198,10 @@ const p = new URLSearchParams(location.search);
 if (p.get('health')) document.getElementById('health').value = p.get('health');
 if (p.get('working')) document.getElementById('working').value = p.get('working');
 if (p.get('tier')) document.getElementById('tier').value = p.get('tier');
-if (p.get('provider')) table.setSearch(p.get('provider'));
+if (p.get('provider')) {
+  document.getElementById('q').value = p.get('provider');
+  table.setSearch(p.get('provider'));
+}
 table.reload();
 </script>
 {% endblock %}

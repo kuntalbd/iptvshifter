@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -168,7 +169,6 @@ def create_app(cfg):
             stats = db.query(
                 "SELECT "
                 "(SELECT COUNT(*) FROM streams) AS total, "
-                "(SELECT COUNT(*) FROM streams WHERE blacklist_tier='none') AS ok, "
                 "(SELECT COUNT(*) FROM streams WHERE blacklist_tier='short') AS short, "
                 "(SELECT COUNT(*) FROM streams WHERE blacklist_tier='permanent') AS perm, "
                 "(SELECT COUNT(*) FROM streams WHERE is_working=1) AS working, "
@@ -391,6 +391,48 @@ def create_app(cfg):
             db.close()
 
     # ---------- scheduler (CRUD via config.yaml) ----------
+    def _valid_cron(cron: str) -> bool:
+        """5-field cron check (minute hour day-of-month month day-of-week).
+        Accepts *, ranges (a-b), lists (a,b), steps (a/n) and 3-letter
+        month/day names. Rejects malformed input that cron_to_oncalendar
+        would otherwise silently fall back to raw OnCalendar for."""
+        fields = cron.split()
+        if len(fields) != 5:
+            return False
+        month_names = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                       "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"}
+        day_names = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"}
+        day_range = {0,1,2,3,4,5,6,7}
+        month_range = {1,2,3,4,5,6,7,8,9,10,11,12}
+        token_re = re.compile(r"^(\d+|\*)(-\d+)?(/\d+)?$")
+        for i, field in enumerate(fields):
+            names = day_names if i == 4 else (month_names if i == 3 else None)
+            for part in field.split(","):
+                upper = part.upper()
+                if names and upper in names:
+                    continue
+                if i == 4:
+                    if upper.isdigit():
+                        val = int(upper)
+                        if val not in day_range:
+                            return False
+                    elif token_re.match(upper):
+                        pass
+                    else:
+                        return False
+                elif i == 3:
+                    if upper.isdigit():
+                        val = int(upper)
+                        if val not in month_range:
+                            return False
+                    elif token_re.match(upper):
+                        pass
+                    else:
+                        return False
+                elif not token_re.match(part):
+                    return False
+        return True
+
     def _regenerate_units():
         """Regenerate systemd units from the (now-updated) scheduler config.
 
@@ -459,6 +501,11 @@ def create_app(cfg):
             raise HTTPException(400, "name, mode, cron required")
         if mode not in ("quick", "regular", "full", "refresh"):
             raise HTTPException(400, "invalid mode")
+        if not _valid_cron(cron):
+            raise HTTPException(
+                400, "invalid cron: expected 5 fields "
+                     "(minute hour day-of-month month day-of-week), "
+                     "e.g. '0 3 */2 * *'")
         sched = cfg.data.setdefault("scheduler", {})
         jobs = sched.setdefault("jobs", [])
         existing = next((j for j in jobs if j.get("name") == name), None)
