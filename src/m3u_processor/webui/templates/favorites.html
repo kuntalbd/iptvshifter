@@ -1,180 +1,226 @@
 {% extends "base.html" %}
 {% block title %}Favorites{% endblock %}
+{% block body_attr %} data-page="favorites"{% endblock %}
 {% block content %}
-<h1>Favorites</h1>
-<p class="muted">A separate, user-curated list. Regular pipeline runs do NOT touch these.
-Token refresh + export happen automatically in <b>refresh mode</b>. Here you can add / edit / delete,
-enable-disable, and manually validate.</p>
+<div class="page-head">
+  <div>
+    <h1>Favorites</h1>
+    <div class="sub">A separate, user-curated list — regular pipeline runs do NOT touch these. Token refresh + export happen automatically in <b>refresh mode</b>.</div>
+  </div>
+</div>
 
-<div class="filters">
-  <input id="q" placeholder="search name / url" oninput="loadFav()">
-  <select id="working" onchange="loadFav()">
-    <option value="">any</option>
-    <option value="working">working</option>
-    <option value="notworking">not working</option>
-    <option value="unchecked">unchecked</option>
-  </select>
-  <select id="group" onchange="loadFav()">
-    <option value="">all groups</option>
-  </select>
-  <button class="btn" onclick="loadFav()">filter</button>
+<div class="toolbar">
+  <div class="field"><span>Search</span><input id="q" type="search" placeholder="search name / url"></div>
+  <div class="field"><span>Working</span>
+    <select id="working">
+      <option value="">any</option>
+      <option value="working">working</option>
+      <option value="notworking">not working</option>
+      <option value="unchecked">unchecked</option>
+    </select>
+  </div>
+  <div class="field"><span>Group</span>
+    <select id="group"><option value="">all groups</option></select>
+  </div>
+  <div class="field"><span>&nbsp;</span>
+    <label class="chk"><input type="checkbox" id="inc-disabled-validate"> include disabled</label>
+  </div>
+  <div class="spacer"></div>
   <button class="btn" onclick="validateNow()">validate now</button>
-  <label class="chk"><input type="checkbox" id="inc-disabled-validate"> include disabled</label>
 </div>
 
 <div id="batch-box" class="box hidden">
-  <span id="sel-count">0 selected</span>
-  <input id="batch-group" placeholder="new group name">
-  <button class="btn" onclick="batchGroup()">set group</button>
-  <button class="btn danger" onclick="batchDelete()">delete selected</button>
-  <button class="btn" onclick="batchEnable(true)">enable</button>
-  <button class="btn" onclick="batchEnable(false)">disable</button>
+  <span id="sel-count" class="muted-sm">0 selected</span>
+  <input id="batch-group" type="text" placeholder="new group name">
+  <button class="btn" id="b-set-group">set group</button>
+  <button class="btn" id="b-enable">enable</button>
+  <button class="btn" id="b-disable">disable</button>
+  <button class="btn" id="b-delete">delete selected</button>
 </div>
 
-<table class="tbl" id="fav">
-  <thead><tr>
-    <th><input type="checkbox" id="sel-all" onchange="selAll(this)"></th>
-    <th>Name</th><th>URL</th><th>Groups</th><th>Enabled</th><th>Working</th>
-    <th>Last Working</th><th>Consec Fail</th><th>Total Fail</th><th>Consec Pass</th><th>Total Pass</th><th>Successes</th><th>Source</th><th></th>
-  </tr></thead>
-  <tbody></tbody>
-</table>
+<div id="fav-slot"></div>
 
-<h2>Add favorite</h2>
-<div class="box">
-  <input id="a-name" placeholder="name (optional)">
-  <input id="a-url" placeholder="url (tokenless base, e.g. http://x/a.m3u)" style="width:340px">
-  <input id="a-origin" placeholder="original URL (tokened playable, optional)" style="width:280px">
-  <input id="a-group" placeholder="group (optional)" style="width:160px">
-  <input id="a-source" placeholder="source path/URL for refresh (optional)" style="width:300px">
+<div class="box" style="margin-top:24px;">
+  <h3>Add favorite</h3>
+  <input id="a-name" type="text" placeholder="name (optional)">
+  <input id="a-url" type="text" placeholder="url (tokenless base, e.g. http://x/a.m3u)" style="min-width:340px">
+  <input id="a-origin" type="text" placeholder="original URL (tokened playable, optional)" style="min-width:280px">
+  <input id="a-group" type="text" placeholder="group (optional)" style="min-width:160px">
+  <input id="a-source" type="text" placeholder="source path/URL for refresh (optional)" style="min-width:300px">
   <label class="chk"><input type="checkbox" id="a-isurl"> source is URL</label>
   <label class="chk"><input type="checkbox" id="a-enabled" checked> enabled</label>
-  <button class="btn primary" onclick="addFav(false)">add</button>
-  <button class="btn" onclick="addFav(true)">+ from existing stream</button>
+  <button class="btn" id="a-add">add</button>
+  <button class="btn" id="a-add-exist">+ from existing stream</button>
   <span id="add-msg" class="msg"></span>
 </div>
 
 <div id="edit-box" class="box hidden">
   <h3>Edit favorite <span id="edit-id" class="muted"></span></h3>
-  <input id="e-name" placeholder="name">
-  <input id="e-group" placeholder="group" style="width:160px">
-  <input id="e-source" placeholder="source path/an URL for refresh" style="width:300px">
+  <input id="e-name" type="text" placeholder="name">
+  <input id="e-group" type="text" placeholder="group" style="min-width:160px">
+  <input id="e-source" type="text" placeholder="source path/URL for refresh" style="min-width:300px">
   <label class="chk"><input type="checkbox" id="e-isurl"> source is URL</label>
   <label class="chk"><input type="checkbox" id="e-enabled"> enabled</label>
-  <button class="btn primary" onclick="saveEdit()">save</button>
-  <button class="btn" onclick="closeEdit()">cancel</button>
+  <button class="btn" id="e-save">save</button>
+  <button class="btn" id="e-cancel">cancel</button>
   <span id="edit-msg" class="msg"></span>
 </div>
-
+{% endblock %}
+{% block scripts %}
 <script>
-function loadFav(){
-  const q=document.getElementById('q').value;
-  const w=document.getElementById('working').value;
-  const g=document.getElementById('group').value;
-  const u=`/api/favorites?q=${encodeURIComponent(q)}&working=${w}&group=${encodeURIComponent(g)}`;
-  apiGet(u).then(rows=>{
-    const tb=document.querySelector('#fav tbody');
-    tb.innerHTML=rows.map(r=>`<tr data-id="${r.id}">
-      <td><input type="checkbox" class="sel" data-id="${r.id}"></td>
-      <td>${esc(r.name)}</td>
-      <td><code class="sm">${esc(r.url)}</code></td>
-      <td>${esc(r.groups)}</td>
-      <td>${r.is_enabled?'✔':'✘'}</td>
-      <td>${r.is_working===1?'✔':(r.is_working===0?'✘':'?')}</td>
-      <td>${r.last_working||''}</td>
-      <td class="${r.consecutive_failures>0?'warn':''}">${r.consecutive_failures||0}</td>
-      <td class="${r.total_failures>0?'warn':''}">${r.total_failures||0}</td>
-      <td class="${r.consecutive_pass>0?'ok':''}">${r.consecutive_pass||0}</td>
-      <td class="${r.total_pass>0?'ok':''}">${r.total_pass||0}</td>
-      <td>${r.total_successes||0}</td>
-      <td class="sm">${esc(r.source_path)}</td>
-      <td><button class="btn sm" onclick="openEdit(${r.id})">edit</button></td>
-    </tr>`).join('');
-    refreshSelCount();
-  });
-  loadGroups();
+let _favRows = [];
+let _favSel = [];
+
+function loadFav() {
+  const q = document.getElementById('q').value;
+  const w = document.getElementById('working').value;
+  const g = document.getElementById('group').value;
+  const u = `/api/favorites?q=${encodeURIComponent(q)}&working=${w}&group=${encodeURIComponent(g)}`;
+  return apiGet(u);
 }
-function loadGroups(){
-  apiGet('/api/favorite-groups').then(g=>{
-    const sel=document.getElementById('group');
-    const cur=sel.value;
-    sel.innerHTML='<option value="">all groups</option>'+g.map(x=>`<option value="${esc(x.name)}">${esc(x.name)}</option>`).join('');
-    sel.value=cur;
+function loadGroups() {
+  apiGet('/api/favorite-groups').then(g => {
+    const sel = document.getElementById('group');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">all groups</option>' + g.map(x => `<option value="${esc(x.name)}">${esc(x.name)}</option>`).join('');
+    sel.value = cur;
   });
 }
-function validateNow(){
-  const body={include_disabled:document.getElementById('inc-disabled-validate').checked};
-  apiPost('/api/favorites/validate-now',body).then(d=>{
-    toast(d.ok?(d.checked+' favorites validated'):('error: '+d.error));loadFav();
+
+const table = new DataTable({
+  el: '#fav-slot',
+  selectable: true,
+  pageSize: 50,
+  searchable: true,
+  searchPlaceholder: 'Filter current results…',
+  searchKeys: ['name', 'url', 'groups', 'source_path'],
+  columns: [
+    { key: 'name', label: 'Name', render: (r) => esc(r.name) },
+    { key: 'url', label: 'URL', render: (r) => `<code class="sm">${esc(r.url)}</code>` },
+    { key: 'groups', label: 'Groups', render: (r) => esc(r.groups) },
+    { key: 'is_enabled', label: 'Enabled', render: (r) => r.is_enabled ? '✔' : '✘' },
+    { key: 'is_working', label: 'Working', render: (r) => checkmark(r.is_working) },
+    { key: 'last_working', label: 'Last Working', render: (r) => esc(r.last_working || '') },
+    { key: 'consecutive_failures', label: 'Consec Fail', cls: 'num', render: (r) => `<span class="${r.consecutive_failures > 0 ? 'tier-short' : ''}">${r.consecutive_failures || 0}</span>` },
+    { key: 'total_failures', label: 'Total Fail', cls: 'num', render: (r) => `<span class="${r.total_failures > 0 ? 'tier-short' : ''}">${r.total_failures || 0}</span>` },
+    { key: 'consecutive_pass', label: 'Consec Pass', cls: 'num', render: (r) => `<span class="${r.consecutive_pass > 0 ? 'on' : ''}">${r.consecutive_pass || 0}</span>` },
+    { key: 'total_pass', label: 'Total Pass', cls: 'num', render: (r) => `<span class="${r.total_pass > 0 ? 'on' : ''}">${r.total_pass || 0}</span>` },
+    { key: 'total_successes', label: 'Successes', cls: 'num', render: (r) => r.total_successes || 0 },
+    { key: 'source_path', label: 'Source', render: (r) => `<span class="sm">${esc(r.source_path)}</span>` },
+    { key: '_edit', label: '', sortable: false, render: (r) => `<button class="btn sm" onclick="openEdit(${r.id})">edit</button>` },
+  ],
+  fetch: () => loadFav().then(rows => { _favRows = rows; return rows; }),
+  onSelChange: (rows) => {
+    _favSel = rows;
+    const el = document.getElementById('sel-count');
+    const box = document.getElementById('batch-box');
+    el.textContent = rows.length + ' selected';
+    box.classList.toggle('hidden', rows.length === 0);
+  },
+  selData: (r) => ({ id: r.id }),
+});
+
+function validateNow() {
+  const body = { include_disabled: document.getElementById('inc-disabled-validate').checked };
+  apiPost('/api/favorites/validate-now', body).then(d => {
+    if (d.ok) { toast(d.checked + ' favorites validated'); table.reload(); }
+    else toast('error: ' + d.error, false);
   });
 }
-function batchGroup(){
-  const g=document.getElementById('batch-group').value.trim();
-  if(!g)return alert('enter a group name');
-  apiPost('/api/favorites/set-group',{ids:selectedIds(),group:g}).then(d=>{
-    toast(d.ok?'Group set':('error: '+(d.error||''))); loadFav();
+function batchGroup() {
+  const g = document.getElementById('batch-group').value.trim();
+  if (!g) return toast('enter a group name', false);
+  apiPost('/api/favorites/set-group', { ids: _favSel.map(r => r.id), group: g }).then(d => {
+    toast(d.ok ? 'Group set' : ('error: ' + (d.error || '')), d.ok);
+    table.reload();
   });
 }
-function batchDelete(){
-  if(!confirm('Delete selected?'))return;
-  const ids=selectedIds();
-  Promise.all(ids.map(id=>apiPost('/api/favorites/delete',{id}))).then(results=>{
-    const ok=results.filter(r=>r.ok).length;
+function batchDelete() {
+  if (!confirmDialog('Delete selected?')) return;
+  const ids = _favSel.map(r => r.id);
+  Promise.all(ids.map(id => apiPost('/api/favorites/delete', { id }))).then(results => {
+    const ok = results.filter(r => r.ok).length;
     toast(`Deleted ${ok}/${ids.length}`);
-    loadFav();
+    table.reload();
   });
 }
-function batchEnable(on){
-  const ids=selectedIds();
-  Promise.all(ids.map(id=>apiPost('/api/favorites/set-enabled',{id,enabled:on}))).then(results=>{
-    const ok=results.filter(r=>r.ok).length;
-    toast(`${on?'Enabled':'Disabled'} ${ok}/${ids.length}`);
-    loadFav();
+function batchEnable(on) {
+  const ids = _favSel.map(r => r.id);
+  Promise.all(ids.map(id => apiPost('/api/favorites/set-enabled', { id, enabled: on }))).then(results => {
+    const ok = results.filter(r => r.ok).length;
+    toast(`${on ? 'Enabled' : 'Disabled'} ${ok}/${ids.length}`);
+    table.reload();
   });
 }
-function addFav(fromExisting){
-  const url=document.getElementById('a-url').value.trim();
-  if(!url)return toast('URL required');
-  const body={url,name:document.getElementById('a-name').value.trim(),
-    original_url:document.getElementById('a-origin').value.trim(),
-    group:document.getElementById('a-group').value.trim(),
-    source_path:document.getElementById('a-source').value.trim(),
-    is_url:document.getElementById('a-isurl').checked,
-    is_enabled:document.getElementById('a-enabled').checked};
-  const ep=fromExisting?'/api/favorites/add-existing':'/api/favorites/add';
-  apiPost(ep,body).then(d=>{
-      document.getElementById('add-msg').textContent=d.ok?'added ✓':'error: '+(d.error||'unknown');
-      if(d.ok){toast('★ Favorite added');
-        ['a-name','a-url','a-origin','a-group','a-source'].forEach(i=>document.getElementById(i).value='');
-        document.getElementById('a-isurl').checked=false;loadFav();}
-    });
-}
-function openEdit(id){
-  apiGet('/api/favorites').then(rows=>{
-    const r=rows.find(x=>x.id===id); if(!r)return;
-    document.getElementById('edit-id').textContent='#'+id;
-    document.getElementById('e-name').value=r.name||'';
-    document.getElementById('e-group').value=(r.groups||'').split(',')[0]||'';
-    document.getElementById('e-source').value=r.source_path||'';
-    document.getElementById('e-isurl').checked=!!r.is_url;
-    document.getElementById('e-enabled').checked=!!r.is_enabled;
-    document.getElementById('edit-box').classList.remove('hidden');
-    document.getElementById('edit-box').dataset.id=id;
+function addFav(fromExisting) {
+  const url = document.getElementById('a-url').value.trim();
+  if (!url) return toast('URL required', false);
+  const body = {
+    url,
+    name: document.getElementById('a-name').value.trim(),
+    original_url: document.getElementById('a-origin').value.trim(),
+    group: document.getElementById('a-group').value.trim(),
+    source_path: document.getElementById('a-source').value.trim(),
+    is_url: document.getElementById('a-isurl').checked,
+    is_enabled: document.getElementById('a-enabled').checked,
+  };
+  const ep = fromExisting ? '/api/favorites/add-existing' : '/api/favorites/add';
+  apiPost(ep, body).then(d => {
+    const msg = document.getElementById('add-msg');
+    msg.textContent = d.ok ? 'added ✓' : 'error: ' + (d.error || 'unknown');
+    if (d.ok) {
+      toast('★ Favorite added');
+      ['a-name', 'a-url', 'a-origin', 'a-group', 'a-source'].forEach(i => document.getElementById(i).value = '');
+      document.getElementById('a-isurl').checked = false;
+      table.reload(); loadGroups();
+    }
   });
 }
-function closeEdit(){document.getElementById('edit-box').classList.add('hidden');}
-function saveEdit(){
-  const id=+document.getElementById('edit-box').dataset.id;
-  const body={id,name:document.getElementById('e-name').value,
-    group:document.getElementById('e-group').value,
-    source_path:document.getElementById('e-source').value,
-    is_url:document.getElementById('e-isurl').checked,
-    is_enabled:document.getElementById('e-enabled').checked};
-  apiPost('/api/favorites/edit',body).then(d=>{
-      document.getElementById('edit-msg').textContent=d.ok?'saved ✓':'error: '+(d.error||'unknown');
-      if(d.ok){closeEdit();loadFav();}
-    });
+function openEdit(id) {
+  const r = _favRows.find(x => x.id === id); if (!r) return;
+  document.getElementById('edit-id').textContent = '#' + id;
+  document.getElementById('e-name').value = r.name || '';
+  document.getElementById('e-group').value = (r.groups || '').split(',')[0] || '';
+  document.getElementById('e-source').value = r.source_path || '';
+  document.getElementById('e-isurl').checked = !!r.is_url;
+  document.getElementById('e-enabled').checked = !!r.is_enabled;
+  document.getElementById('edit-box').classList.remove('hidden');
+  document.getElementById('edit-box').dataset.id = id;
 }
-loadFav();
+function closeEdit() { document.getElementById('edit-box').classList.add('hidden'); }
+function saveEdit() {
+  const id = +document.getElementById('edit-box').dataset.id;
+  const body = {
+    id,
+    name: document.getElementById('e-name').value,
+    group: document.getElementById('e-group').value,
+    source_path: document.getElementById('e-source').value,
+    is_url: document.getElementById('e-isurl').checked,
+    is_enabled: document.getElementById('e-enabled').checked,
+  };
+  apiPost('/api/favorites/edit', body).then(d => {
+    document.getElementById('edit-msg').textContent = d.ok ? 'saved ✓' : 'error: ' + (d.error || 'unknown');
+    if (d.ok) { closeEdit(); table.reload(); }
+  });
+}
+
+document.getElementById('b-set-group').addEventListener('click', batchGroup);
+document.getElementById('b-enable').addEventListener('click', () => batchEnable(true));
+document.getElementById('b-disable').addEventListener('click', () => batchEnable(false));
+document.getElementById('b-delete').addEventListener('click', batchDelete);
+document.getElementById('a-add').addEventListener('click', () => addFav(false));
+document.getElementById('a-add-exist').addEventListener('click', () => addFav(true));
+document.getElementById('e-save').addEventListener('click', saveEdit);
+document.getElementById('e-cancel').addEventListener('click', closeEdit);
+
+['q', 'working', 'group'].forEach(id => {
+  const el = document.getElementById(id);
+  const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+  const fn = () => table.reload();
+  if (evt === 'input') el.addEventListener(evt, debounce(fn, 300));
+  else el.addEventListener(evt, fn);
+});
+loadGroups();
+table.reload();
 </script>
 {% endblock %}

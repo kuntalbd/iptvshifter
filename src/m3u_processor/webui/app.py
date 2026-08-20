@@ -525,7 +525,7 @@ def create_app(cfg):
                 wheres.append("(s.name LIKE ? OR s.url LIKE ?)")
                 params.extend([f"%{q}%", f"%{q}%"])
             sql = ("SELECT s.id, s.name, s.url, s.original_url, s.provider_domain, "
-                   "s.blacklist_tier, s.is_working, s.health_tier, s.health_score, "
+                   "s.blacklist_tier, s.blacklist_reason, s.is_working, s.health_tier, s.health_score, "
                    "s.last_checked, s.last_working, s.total_failures, "
                    "s.consecutive_failures, s.consecutive_pass, s.total_pass, "
                    "CASE WHEN f.fid IS NULL THEN 0 ELSE 1 END AS is_favorite, "

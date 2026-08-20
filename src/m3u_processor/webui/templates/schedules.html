@@ -1,60 +1,75 @@
 {% extends "base.html" %}
 {% block title %}Schedules{% endblock %}
+{% block body_attr %} data-page="schedules"{% endblock %}
 {% block content %}
-<h1>Scheduled jobs</h1>
-<p class="muted">Jobs run as systemd timers (reboot-persistent). Add / edit / remove below — changes are written to <code>config.yaml</code> and the systemd units are regenerated automatically.</p>
+<div class="page-head">
+  <div>
+    <h1>Scheduled jobs</h1>
+    <div class="sub">Jobs run as systemd timers (reboot-persistent). Changes are written to <code>config.yaml</code> and systemd units regenerate automatically.</div>
+  </div>
+</div>
 
-<table id="jobs" class="grid">
-  <thead><tr><th>Name</th><th>Mode</th><th>Cron</th><th>Next run</th><th></th></tr></thead>
-  <tbody></tbody>
-</table>
+<div id="jobs-slot"></div>
 
-<h2>Add / edit job</h2>
-<div class="filters">
-  <label>Name <input id="j_name" placeholder="e.g. night-quick"></label>
-  <label>Mode
+<div class="box" style="margin-top:24px;">
+  <h3>Add / edit job</h3>
+  <div class="field" style="display:flex; flex-direction:column; gap:4px;"><span style="font-size:11px; color:#8b97a8; font-weight:600; text-transform:uppercase;">Name</span>
+    <input id="j_name" type="text" placeholder="e.g. night-quick">
+  </div>
+  <div class="field" style="display:flex; flex-direction:column; gap:4px;"><span style="font-size:11px; color:#8b97a8; font-weight:600; text-transform:uppercase;">Mode</span>
     <select id="j_mode">
       <option value="quick">quick</option>
       <option value="regular">regular</option>
       <option value="full">full</option>
       <option value="refresh">refresh</option>
     </select>
-  </label>
-  <label>Cron <input id="j_cron" placeholder="0 3 */2 * *" value="0 3 */2 * *"></label>
-  <button onclick="saveJob()">Save job</button>
+  </div>
+  <div class="field" style="display:flex; flex-direction:column; gap:4px;"><span style="font-size:11px; color:#8b97a8; font-weight:600; text-transform:uppercase;">Cron</span>
+    <input id="j_cron" type="text" placeholder="0 3 */2 * *" value="0 3 */2 * *">
+  </div>
+  <button id="save-job">Save job</button>
 </div>
 <p class="muted">Cron format: <code>minute hour day-of-month month day-of-week</code>. Examples:
   <code>7 */2 * * *</code> (every 2h), <code>0 3 */2 * *</code> (every 2 days at 03:00), <code>0 3 * * FRI</code> (Fridays 03:00).</p>
 
 <pre id="msg"></pre>
+{% endblock %}
+{% block scripts %}
 <script>
-async function load(){
-  const d=await apiGet('/api/scheduler');
-  const tb=document.querySelector('#jobs tbody'); tb.innerHTML='';
-  (d.jobs||[]).forEach(j=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${j.name}</td><td>${j.mode}</td><td><code>${j.cron}</code></td>
-      <td class="muted">—</td>
-      <td><button onclick="delJob('${j.name}')">Remove</button></td>`;
-    tb.appendChild(tr);
-  });
+let _jobs = [];
+
+const table = new DataTable({
+  el: '#jobs-slot',
+  pageSize: 0,
+  columns: [
+    { key: 'name', label: 'Name', render: (r) => `<strong>${esc(r.name)}</strong>` },
+    { key: 'mode', label: 'Mode', render: (r) => `<span class="pill run">${esc(r.mode)}</span>` },
+    { key: 'cron', label: 'Cron', render: (r) => `<code>${esc(r.cron)}</code>` },
+    { key: '_next', label: 'Next run', render: () => `<span class="muted">—</span>` },
+    { key: '_action', label: '', sortable: false, render: (r) => `<button class="btn" onclick="delJob('${esc(r.name)}')">Remove</button>` },
+  ],
+  fetch: () => apiGet('/api/scheduler').then(d => { _jobs = d.jobs || []; return _jobs; }),
+  emptyText: 'no scheduled jobs',
+});
+
+async function saveJob() {
+  const name = document.getElementById('j_name').value.trim();
+  const mode = document.getElementById('j_mode').value;
+  const cron = document.getElementById('j_cron').value.trim();
+  if (!name) { document.getElementById('msg').textContent = 'Name required'; return; }
+  const d = await apiPost('/api/scheduler', { name, mode, cron });
+  document.getElementById('msg').textContent = JSON.stringify(d);
+  toast(d.ok ? 'Job saved' : 'Failed to save', d.ok);
+  table.reload();
 }
-async function saveJob(){
-  const name=document.getElementById('j_name').value.trim();
-  const mode=document.getElementById('j_mode').value;
-  const cron=document.getElementById('j_cron').value.trim();
-  if(!name){document.getElementById('msg').textContent='Name required';return;}
-  const d=await apiPost('/api/scheduler',{name,mode,cron});
-  document.getElementById('msg').textContent=JSON.stringify(d);
-  load();
+async function delJob(name) {
+  if (!confirmDialog('Remove job "' + name + '"?')) return;
+  const d = await apiDelete('/api/scheduler', { name });
+  document.getElementById('msg').textContent = JSON.stringify(d);
+  toast(d.ok ? 'Job removed' : 'Failed to remove', d.ok);
+  table.reload();
 }
-async function delJob(name){
-  const r=await apiFetch('/api/scheduler',{method:'DELETE',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name})});
-  const d=await r.json();
-  document.getElementById('msg').textContent=JSON.stringify(d);
-  load();
-}
-load();
+document.getElementById('save-job').addEventListener('click', saveJob);
+table.reload();
 </script>
 {% endblock %}

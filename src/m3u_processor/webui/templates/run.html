@@ -1,23 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Run{% endblock %}
+{% block body_attr %} data-page="run"{% endblock %}
 {% block content %}
-<h1>Run validation</h1>
+<div class="page-head">
+  <div>
+    <h1>Run validation</h1>
+    <div class="sub">Start a validation run manually or via a scheduler job.</div>
+  </div>
+</div>
 
-<div id="active-warn" class="banner hidden">A run is already active (<span id="active-mode"></span>). New runs will be <b>discarded</b> until it finishes — or you can <button id="stop-btn" onclick="stopRun()">Stop active run</button>.</div>
+<div id="active-warn" class="banner hidden">
+  A run is already active (<span id="active-mode"></span>). New runs will be <b>discarded</b> until it finishes — or you can <button id="stop-btn" onclick="stopRun()">Stop active run</button>.
+</div>
 
-<div class="filters">
-  <label>Scheduler job
+<div class="box">
+  <div class="field" style="display:flex; flex-direction:column; gap:4px;"><span style="font-size:11px; color:#8b97a8; font-weight:600; text-transform:uppercase;">Scheduler job</span>
     <select id="job"><option value="">— manual mode —</option></select>
-  </label>
-  <label>Mode
+  </div>
+  <div class="field" style="display:flex; flex-direction:column; gap:4px;"><span style="font-size:11px; color:#8b97a8; font-weight:600; text-transform:uppercase;">Mode</span>
     <select id="mode">
       <option value="quick">quick</option>
       <option value="regular">regular</option>
       <option value="full">full</option>
       <option value="refresh">refresh (tokened+working)</option>
     </select>
-  </label>
-  <button onclick="startRun()">Start</button>
+  </div>
+  <button id="start-btn">Start</button>
 </div>
 <p class="muted">Pick a <b>scheduler job</b> to run it with its configured mode, or choose a manual mode.
   Only <b>one run</b> executes at a time — if another is active, your start is recorded as <code>discarded</code> with a reason.</p>
@@ -28,58 +36,78 @@
 <h2>Active run</h2>
 <div id="live-box" class="muted">use the Live page to watch progress</div>
 <button id="stop2" onclick="stopRun()">Stop active run</button>
-
+{% endblock %}
+{% block scripts %}
 <script>
-let es=null;
-async function refreshJobs(){
-  const d=await apiGet('/api/scheduler');
-  const sel=document.getElementById('job');
-  (d.jobs||[]).forEach(j=>{
-    const o=document.createElement('option');
-    o.value=j.name; o.textContent=`${j.name} (${j.mode})`;
+let es = null;
+async function refreshJobs() {
+  const d = await apiGet('/api/scheduler');
+  const sel = document.getElementById('job');
+  (d.jobs || []).forEach(j => {
+    const o = document.createElement('option');
+    o.value = j.name; o.textContent = `${j.name} (${j.mode})`;
     sel.appendChild(o);
   });
 }
-async function refreshActive(){
-  const d=await apiGet('/api/run-status');
-  const warn=document.getElementById('active-warn');
-  if(d.is_run_active){
+async function refreshActive() {
+  const d = await apiGet('/api/run-status');
+  const warn = document.getElementById('active-warn');
+  if (d.is_run_active) {
     warn.classList.remove('hidden');
-    document.getElementById('active-mode').textContent=d.mode;
+    document.getElementById('active-mode').textContent = d.mode;
   } else warn.classList.add('hidden');
 }
-function startRun(){
-  const job=document.getElementById('job').value;
-  const mode=document.getElementById('mode').value;
-  document.getElementById('result').textContent='';
-  const body=job?{job}:{mode};
-  apiPost('/api/run',body)
-    .then(j=>{
-      if(j.error){ document.getElementById('progress').textContent='error';
-        document.getElementById('result').textContent='Launch failed: '+j.error;
-        return; }
-      document.getElementById('progress').textContent='run '+j.run_id+' started (mode='+j.mode+')…';
-      if(es) es.close();
-      const tok=getToken();
-      const base='/api/events?run_id='+encodeURIComponent(j.run_id);
-      es=new EventSource(tok?base+'&token='+encodeURIComponent(tok):base);
-      es.onmessage=e=>{
-        const d=JSON.parse(e.data);
-        if(d.type==='progress') document.getElementById('progress').textContent=`${d.done}/${d.total}`;
-        else if(d.type==='discarded'){ document.getElementById('progress').textContent='DISCARDED'; document.getElementById('result').textContent='Reason: '+d.reason; es.close(); refreshActive(); }
-        else if(d.type==='done'){ document.getElementById('progress').textContent='done'; document.getElementById('result').textContent=JSON.stringify(d.stats,null,2); es.close(); refreshActive(); }
-        else if(d.type==='error'){ document.getElementById('progress').textContent='error'; document.getElementById('result').textContent=d.message; es.close(); }
+function startRun() {
+  const job = document.getElementById('job').value;
+  const mode = document.getElementById('mode').value;
+  document.getElementById('result').textContent = '';
+  const body = job ? { job } : { mode };
+  apiPost('/api/run', body)
+    .then(j => {
+      if (j.error) {
+        document.getElementById('progress').textContent = 'error';
+        document.getElementById('result').textContent = 'Launch failed: ' + j.error;
+        toast('Launch failed', false);
+        return;
+      }
+      document.getElementById('progress').textContent = 'run ' + j.run_id + ' started (mode=' + j.mode + ')…';
+      if (es) es.close();
+      const tok = getToken();
+      const base = '/api/events?run_id=' + encodeURIComponent(j.run_id);
+      es = new EventSource(tok ? base + '&token=' + encodeURIComponent(tok) : base);
+      es.onmessage = e => {
+        const d = JSON.parse(e.data);
+        if (d.type === 'progress') document.getElementById('progress').textContent = `${d.done}/${d.total}`;
+        else if (d.type === 'discarded') {
+          document.getElementById('progress').textContent = 'DISCARDED';
+          document.getElementById('result').textContent = 'Reason: ' + d.reason;
+          es.close(); refreshActive();
+        } else if (d.type === 'done') {
+          document.getElementById('progress').textContent = 'done (' + d.status + ')';
+          document.getElementById('result').textContent = JSON.stringify(d.stats, null, 2);
+          es.close(); refreshActive();
+        } else if (d.type === 'error') {
+          document.getElementById('progress').textContent = 'error';
+          document.getElementById('result').textContent = d.message;
+          es.close();
+        }
       };
-      es.onerror=()=>{ document.getElementById('progress').textContent='stream error';
-        document.getElementById('result').textContent='Event stream failed — check the server log.'; es.close(); };
-    }).catch(e=>{ document.getElementById('progress').textContent='error';
-      document.getElementById('result').textContent='Request failed: '+e; });
+      es.onerror = () => {
+        document.getElementById('progress').textContent = 'stream error';
+        document.getElementById('result').textContent = 'Event stream failed — check the server log.';
+        es.close();
+      };
+    }).catch(e => {
+      document.getElementById('progress').textContent = 'error';
+      document.getElementById('result').textContent = 'Request failed: ' + e;
+    });
 }
-async function stopRun(){
-  const d=await apiPost('/api/run/stop');
-  document.getElementById('result').textContent=JSON.stringify(d);
-  setTimeout(refreshActive,1500);
+async function stopRun() {
+  const d = await apiPost('/api/run/stop');
+  document.getElementById('result').textContent = JSON.stringify(d);
+  setTimeout(refreshActive, 1500);
 }
+document.getElementById('start-btn').addEventListener('click', startRun);
 refreshJobs(); refreshActive();
 setInterval(refreshActive, 10000);
 </script>

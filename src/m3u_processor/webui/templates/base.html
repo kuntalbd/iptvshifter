@@ -1,33 +1,42 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}M3U Processor{% endblock %}</title>
+  <title>{% block title %}M3U Processor{% endblock %} · M3U Processor</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/style.css">
   {% block head %}{% endblock %}
 </head>
-<body>
+<body{% block body_attr %}{% endblock %}>
   <header class="topbar">
-    <div class="brand">M3U Processor <span class="ver">v{{ version }}</span></div>
-    <nav>
-      <a href="/">Dashboard</a>
-      <a href="/streams">Streams</a>
-      <a href="/providers">Providers</a>
-      <a href="/blacklist">Blacklist</a>
-      <a href="/favorites">Favorites</a>
-      <a href="/run">Run</a>
-      <a href="/runs">Runs</a>
-      <a href="/errors">Errors</a>
-      <a href="/schedules">Schedules</a>
-      <a href="/live">Live</a>
-      <a href="/settings">Settings</a>
-    </nav>
+    <div class="container">
+      <div class="brand">M3U Processor <span class="ver">v{{ version }}</span></div>
+      <nav id="main-nav">
+        <a href="/" data-page="dashboard">Dashboard</a>
+        <a href="/streams" data-page="streams">Streams</a>
+        <a href="/providers" data-page="providers">Providers</a>
+        <a href="/blacklist" data-page="blacklist">Blacklist</a>
+        <a href="/favorites" data-page="favorites">Favorites</a>
+        <a href="/run" data-page="run">Run</a>
+        <a href="/runs" data-page="runs">Runs</a>
+        <a href="/errors" data-page="errors">Errors</a>
+        <a href="/schedules" data-page="schedules">Schedules</a>
+        <a href="/live" data-page="live">Live</a>
+        <a href="/settings" data-page="settings">Settings</a>
+      </nav>
+    </div>
   </header>
-  <main>
+  <main class="container">
     {% block content %}{% endblock %}
   </main>
   <script src="/static/app.js"></script>
+  <script>
+    const _pg = document.body.dataset.page || "";
+    document.querySelectorAll("#main-nav a[data-page]").forEach(a => {
+      if (a.dataset.page === _pg) a.classList.add("active");
+    });
+  </script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

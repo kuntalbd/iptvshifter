@@ -1,34 +1,43 @@
 {% extends "base.html" %}
 {% block title %}Live Run{% endblock %}
+{% block body_attr %} data-page="live"{% endblock %}
 {% block content %}
-<h1>Live Run</h1>
+<div class="page-head">
+  <div>
+    <h1>Live Run</h1>
+    <div class="sub">Real-time progress of the active validation run.</div>
+  </div>
+</div>
 <div id="live">
   <p class="muted">Checking for an active run…</p>
 </div>
+{% endblock %}
+{% block scripts %}
 <script>
-function render(d){
-  const el=document.getElementById("live");
-  if(!d.is_run_active){
-    el.innerHTML=`<div class="card"><div class="num">idle</div>
-      <div class="lb">No active run right now.</div></div>
-      <p class="muted">Runs triggered by the scheduler or the Run page appear here automatically.</p>`;
+function render(d) {
+  const el = document.getElementById("live");
+  if (!d.is_run_active) {
+    el.innerHTML = `<div class="cards">
+      <div class="card"><div class="num">idle</div><div class="lbl">No active run right now.</div></div>
+    </div>
+    <p class="muted">Runs triggered by the scheduler or the Run page appear here automatically.</p>`;
     return;
   }
-  const p=d.progress||{};
-  const pct=p.percent!=null?p.percent:0;
-  el.innerHTML=`
+  const p = d.progress || {};
+  const pct = p.percent != null ? p.percent : 0;
+  el.innerHTML = `
     <div class="cards">
-      <div class="card"><div class="num">${d.mode}</div><div class="lb">mode</div></div>
-      <div class="card"><div class="num">${fmtElapsed(d.started_at)}</div><div class="lb">elapsed</div></div>
-      <div class="card"><div class="num">${pct}%</div><div class="lb">progress</div></div>
-      <div class="card"><div class="num">${p.done||0}/${p.total||0}</div><div class="lb">streams</div></div>
-      <div class="card good"><div class="num">${p.working||0}</div><div class="lb">working</div></div>
-      <div class="card"><div class="num">${p.failed||0}</div><div class="lb">failed</div></div>
+      <div class="card"><div class="num">${esc(d.mode)}</div><div class="lbl">mode</div></div>
+      <div class="card"><div class="num">${fmtElapsed(d.started_at)}</div><div class="lbl">elapsed</div></div>
+      <div class="card"><div class="num">${pct}%</div><div class="lbl">progress</div></div>
+      <div class="card"><div class="num">${p.done || 0}/${p.total || 0}</div><div class="lbl">streams</div></div>
+      <div class="card good"><div class="num">${p.working || 0}</div><div class="lbl">working</div></div>
+      <div class="card bad"><div class="num">${p.failed || 0}</div><div class="lbl">failed</div></div>
     </div>
     <div class="progress"><div class="bar" style="width:${pct}%"></div></div>
-    <p class="muted">run_id ${d.run_id} · started ${fmtTime(d.started_at)} · auto-refresh 3s</p>`;
+    <p class="muted">run_id ${esc(d.run_id)} · started ${fmtTime(d.started_at)} · auto-refresh 3s</p>`;
 }
-function load(){
+function load() {
   apiGet("/api/live").then(render);
 }
 load(); setInterval(load, 3000);

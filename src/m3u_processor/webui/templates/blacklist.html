@@ -1,27 +1,46 @@
 {% extends "base.html" %}
 {% block title %}Blacklist{% endblock %}
+{% block body_attr %} data-page="blacklist"{% endblock %}
 {% block content %}
-<h1>Blacklist</h1>
-<div class="filters">
-  <select id="tier" onchange="loadBL()">
-    <option value="permanent">permanent</option>
-    <option value="short">short</option>
-  </select>
+<div class="page-head">
+  <div>
+    <h1>Blacklist</h1>
+    <div class="sub">Streams flagged with a short or permanent blacklist tier.</div>
+  </div>
 </div>
-<table class="tbl" id="bl">
-  <thead><tr><th>Name</th><th>Provider</th><th>Tier</th><th>Reason</th></tr></thead>
-  <tbody></tbody>
-</table>
+
+<div class="toolbar">
+  <div class="field"><span>Tier</span>
+    <select id="tier">
+      <option value="permanent">permanent</option>
+      <option value="short">short</option>
+      <option value="none">none</option>
+    </select>
+  </div>
+  <div class="spacer"></div>
+  <span id="result-count" class="result-count"></span>
+</div>
+
+<div id="bl-slot"></div>
+{% endblock %}
+{% block scripts %}
 <script>
-function loadBL(){
-  const tier=document.getElementById('tier').value;
-  apiGet(`/api/streams?tier=${tier}&limit=500`).then(rows=>{
-    const tb=document.querySelector('#bl tbody');
-    tb.innerHTML=rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.provider_domain)}</td>
-      <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
-      <td>${esc(r.blacklist_reason||'')}</td></tr>`).join('');
-  });
-}
-loadBL();
+const table = new DataTable({
+  el: '#bl-slot',
+  pageSize: 100,
+  searchable: true,
+  searchPlaceholder: 'Filter name / provider…',
+  searchKeys: ['name', 'provider_domain'],
+  columns: [
+    { key: 'name', label: 'Name', render: (r) => esc(r.name) },
+    { key: 'provider_domain', label: 'Provider', render: (r) => esc(r.provider_domain) },
+    { key: 'blacklist_tier', label: 'Tier', render: (r) => `<span class="tier-${esc(r.blacklist_tier)}">${esc(r.blacklist_tier)}</span>` },
+    { key: 'blacklist_reason', label: 'Reason', render: (r) => `<span class="reason">${esc(r.blacklist_reason || '')}</span>` },
+  ],
+  fetch: () => apiGet('/api/streams?tier=' + encodeURIComponent(document.getElementById('tier').value) + '&limit=500'),
+  onLoad: (rows) => { document.getElementById('result-count').textContent = rows.length + ' streams'; },
+});
+document.getElementById('tier').addEventListener('change', () => table.reload());
+table.reload();
 </script>
 {% endblock %}

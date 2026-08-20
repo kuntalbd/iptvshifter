@@ -1,42 +1,50 @@
 {% extends "base.html" %}
 {% block title %}Run Errors{% endblock %}
+{% block body_attr %} data-page="errors"{% endblock %}
 {% block content %}
-<h2>Run Errors &amp; Exceptions</h2>
-<p class="muted">Per-run, non-fatal errors captured during runs (source fetch/parse failures, rate-limits, timeouts). Fatal run errors also appear here with type <code>fatal_run_error</code>.</p>
-
-<div class="row" style="margin-bottom:10px">
-  <label>Filter by run_id:
-    <input id="rid" type="text" placeholder="optional run id" style="width:320px">
-  </label>
-  <button id="apply">Apply</button>
-  <button id="clear">Clear</button>
+<div class="page-head">
+  <div>
+    <h1>Run Errors &amp; Exceptions</h1>
+    <div class="sub">Per-run, non-fatal errors captured during runs (source fetch/parse failures, rate-limits, timeouts). Fatal run errors also appear here with type <code>fatal_run_error</code>.</div>
+  </div>
 </div>
 
-<table class="data" id="errTable">
-  <thead><tr>
-    <th>Time</th><th>Run</th><th>Type</th><th>Message</th><th>Source</th>
-  </tr></thead>
-  <tbody id="rows"><tr><td colspan="5">loading…</td></tr></tbody>
-</table>
+<div class="toolbar">
+  <div class="field"><span>Run ID</span><input id="rid" type="text" placeholder="optional run id" style="min-width:320px"></div>
+  <button id="apply">Apply</button>
+  <button id="clear">Clear</button>
+  <div class="spacer"></div>
+  <span id="result-count" class="result-count"></span>
+</div>
 
+<div id="err-slot"></div>
+{% endblock %}
+{% block scripts %}
 <script>
-async function load(){
-  const rid = document.getElementById('rid').value.trim();
-  let url = '/api/run-errors?limit=300';
-  if(rid) url += '&run_id=' + encodeURIComponent(rid);
-  const d = await apiGet(url);
-  const tb = document.getElementById('rows');
-  if(!d.errors.length){ tb.innerHTML = '<tr><td colspan="5">no errors logged</td></tr>'; return; }
-  tb.innerHTML = d.errors.map(e => `<tr>
-    <td>${esc(e.occurred_at)}</td>
-    <td title="${esc(e.run_id)}">${esc((e.run_id||'').slice(0,24))}</td>
-    <td><span class="badge ${e.error_type==='fatal_run_error'?'bad':'warn'}">${esc(e.error_type)}</span></td>
-    <td>${esc(e.message)}</td>
-    <td class="src">${esc(e.source)}</td>
-  </tr>`).join('');
-}
-document.getElementById('apply').onclick = load;
-document.getElementById('clear').onclick = () => { document.getElementById('rid').value=''; load(); };
-load();
+const table = new DataTable({
+  el: '#err-slot',
+  pageSize: 100,
+  searchable: true,
+  searchPlaceholder: 'Filter message / source…',
+  searchKeys: ['message', 'source', 'error_type'],
+  columns: [
+    { key: 'occurred_at', label: 'Time', render: (r) => esc(r.occurred_at) },
+    { key: 'run_id', label: 'Run', render: (r) => `<span title="${esc(r.run_id)}">${esc((r.run_id || '').slice(0, 24))}</span>` },
+    { key: 'error_type', label: 'Type', render: (r) => `<span class="badge ${r.error_type === 'fatal_run_error' ? 'bad' : 'warn'}">${esc(r.error_type)}</span>` },
+    { key: 'message', label: 'Message', render: (r) => esc(r.message) },
+    { key: 'source', label: 'Source', render: (r) => `<span class="src">${esc(r.source)}</span>` },
+  ],
+  fetch: () => {
+    const rid = document.getElementById('rid').value.trim();
+    let url = '/api/run-errors?limit=300';
+    if (rid) url += '&run_id=' + encodeURIComponent(rid);
+    return apiGet(url).then(d => d.errors);
+  },
+  onLoad: (rows) => { document.getElementById('result-count').textContent = rows.length + ' errors'; },
+  emptyText: 'no errors logged',
+});
+document.getElementById('apply').addEventListener('click', () => table.reload());
+document.getElementById('clear').addEventListener('click', () => { document.getElementById('rid').value = ''; table.reload(); });
+table.reload();
 </script>
 {% endblock %}

@@ -1,7 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
+{% block body_attr %} data-page="dashboard"{% endblock %}
 {% block content %}
-<h1>Dashboard</h1>
+<div class="page-head">
+  <div>
+    <h1>Dashboard</h1>
+    <div class="sub">Overview of the stream library and pipeline state.</div>
+  </div>
+  <div class="actions">
+    <a href="/run" role="button">▶ Run a validation</a>
+    <button id="gen-btn">⬇ Generate playlists</button>
+    <span id="gen-status" class="msg"></span>
+  </div>
+</div>
+
 <div class="cards">
   <div class="card"><div class="num">{{ stats.total }}</div><div class="lbl">Total streams</div></div>
   <div class="card ok"><div class="num">{{ stats.working }}</div><div class="lbl">Working</div></div>
@@ -20,38 +32,38 @@
   · <a href="/streams?health=healthy">view healthy →</a>
   · <a href="/streams?health=slow">view slow →</a></p>
 
-<h2>Quick actions</h2>
-<div class="actions">
-  <a class="btn" href="/run">▶ Run a validation</a>
-  <button class="btn" onclick="generateOutputs()">⬇ Generate playlists</button>
-  <span id="gen-status" class="muted"></span>
-</div>
-
 <h2>Last run</h2>
 {% if last_run %}
-<table class="tbl">
-  <tr><th>Run ID</th><td>{{ last_run.run_id }}</td></tr>
-  <tr><th>Mode</th><td>{{ last_run.mode }}</td></tr>
-  <tr><th>Status</th><td>{{ last_run.status }}</td></tr>
-  <tr><th>Started</th><td>{{ last_run.started_at }}</td></tr>
-</table>
+<div class="table-wrap" style="max-width:640px;">
+  <table class="data-table">
+    <tbody>
+      <tr><th style="width:110px">Run ID</th><td>{{ last_run.run_id }}</td></tr>
+      <tr><th>Mode</th><td>{{ last_run.mode }}</td></tr>
+      <tr><th>Status</th><td>{{ last_run.status }}</td></tr>
+      <tr><th>Started</th><td>{{ last_run.started_at }}</td></tr>
+    </tbody>
+  </table>
+</div>
 {% else %}
 <p class="muted">No runs yet. Go to <a href="/run">Run</a> to start one.</p>
 {% endif %}
-
+{% endblock %}
+{% block scripts %}
 <script>
-apiGet('/api/health-stats').then(d=>{
-  document.getElementById('h-healthy').textContent=d.healthy;
-  document.getElementById('h-medium').textContent=d.medium;
-  document.getElementById('h-slow').textContent=d.slow;
-  document.getElementById('h-unknown').textContent=d.unknown;
-  if(d.last_refresh_at) document.getElementById('last-refresh').textContent=d.last_refresh_at;
+apiGet('/api/health-stats').then(d => {
+  document.getElementById('h-healthy').textContent = d.healthy;
+  document.getElementById('h-medium').textContent = d.medium;
+  document.getElementById('h-slow').textContent = d.slow;
+  document.getElementById('h-unknown').textContent = d.unknown;
+  if (d.last_refresh_at) document.getElementById('last-refresh').textContent = d.last_refresh_at;
 });
-function generateOutputs(){
-  const s=document.getElementById('gen-status'); s.textContent='generating…';
-  apiPost('/api/generate',{formats:['vlc','kodi','tivimate']})
-    .then(d=>{ s.textContent='done: '+JSON.stringify(d.files); })
-    .catch(e=>{ s.textContent='error: '+e; });
+function generateOutputs() {
+  const s = document.getElementById('gen-status');
+  s.textContent = 'generating…';
+  apiPost('/api/generate', { formats: ['vlc', 'kodi', 'tivimate'] })
+    .then(d => { s.textContent = 'done: ' + JSON.stringify(d.files); toast('Playlists generated'); })
+    .catch(e => { s.textContent = 'error: ' + e; toast('Generate failed', false); });
 }
+document.getElementById('gen-btn').addEventListener('click', generateOutputs);
 </script>
 {% endblock %}

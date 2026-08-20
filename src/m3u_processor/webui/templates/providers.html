@@ -1,135 +1,141 @@
 {% extends "base.html" %}
 {% block title %}Providers{% endblock %}
+{% block body_attr %} data-page="providers"{% endblock %}
 {% block content %}
-<h1>Providers</h1>
-<div class="summary-bar" id="summary"></div>
+<div class="page-head">
+  <div>
+    <h1>Providers</h1>
+    <div class="sub">Per-provider stream counts, health and blacklist breakdown.</div>
+  </div>
+  <div class="summary-bar" id="summary"></div>
+</div>
 
-<div class="row" style="margin-bottom:10px">
-  <input id="providerSearch" placeholder="Search provider..." class="filter-input">
-  <select id="filterState">
-    <option value="">All States</option>
-    <option value="enabled">Enabled Only</option>
-    <option value="disabled">Disabled Only</option>
-  </select>
-  <select id="sortBy">
-    <option value="streams-desc">Sort: Most Streams</option>
-    <option value="streams-asc">Sort: Fewest Streams</option>
-    <option value="working-desc">Sort: Most Working</option>
-    <option value="name-asc">Sort: Name A-Z</option>
-    <option value="name-desc">Sort: Name Z-A</option>
-  </select>
+<div class="toolbar">
+  <div class="field"><span>Search</span><input id="providerSearch" type="search" placeholder="Search provider…"></div>
+  <div class="field"><span>State</span>
+    <select id="filterState">
+      <option value="">All States</option>
+      <option value="enabled">Enabled Only</option>
+      <option value="disabled">Disabled Only</option>
+    </select>
+  </div>
+  <div class="field"><span>Sort</span>
+    <select id="sortBy">
+      <option value="streams-desc">Most Streams</option>
+      <option value="streams-asc">Fewest Streams</option>
+      <option value="working-desc">Most Working</option>
+      <option value="name-asc">Name A-Z</option>
+      <option value="name-desc">Name Z-A</option>
+    </select>
+  </div>
+  <div class="spacer"></div>
   <span id="resultCount" class="result-count"></span>
 </div>
 
-<table class="tbl" id="providers">
-  <thead>
-    <tr>
-      <th>Provider</th>
-      <th>Streams</th>
-      <th style="text-align:center">Working</th>
-      <th style="text-align:center">Failed</th>
-      <th style="text-align:center">Unchecked</th>
-      <th style="text-align:center">Health</th>
-      <th style="text-align:center">Blacklist</th>
-      <th>State</th>
-      <th>Reason</th>
-      <th>Action</th>
-    </tr>
-  </thead>
-  <tbody></tbody>
-</table>
-<div class="pagination" id="pagination"></div>
-
+<div id="providers-slot"></div>
+{% endblock %}
+{% block scripts %}
 <script>
-let currentPage = 1;
-let debounceTimer = null;
 let _providers = [];
+let _currentPage = 1;
+let _pager = null;
 
 function loadProviders(page) {
-  currentPage = page || 1;
+  _currentPage = page || 1;
   const search = (document.getElementById('providerSearch').value || '').trim();
   const state = document.getElementById('filterState').value;
   const sort = document.getElementById('sortBy').value;
-  const params = new URLSearchParams({search, state, sort, page: currentPage, per_page: 50});
-
-  apiGet('/api/providers?' + params).then(data => {
-    const rows = data.providers;
-    _providers = rows;
+  const params = new URLSearchParams({ search, state, sort, page: _currentPage, per_page: 50 });
+  return apiGet('/api/providers?' + params).then(data => {
+    _providers = data.providers;
+    _pager = { totalPages: data.total_pages, page: data.page };
     const t = data.totals || {};
     document.getElementById('summary').innerHTML = `
-      <span class="summary-item"><strong>${(t.total_providers||0).toLocaleString()}</strong> providers</span>
-      <span class="summary-item"><strong>${(t.total_streams||0).toLocaleString()}</strong> total streams</span>
-      <span class="summary-item"><strong class="c-ok">${(t.working||0).toLocaleString()}</strong> working</span>
-      <span class="summary-item"><strong class="c-bad">${(t.failed||0).toLocaleString()}</strong> failed</span>
-      <span class="summary-item"><strong class="c-purple">${(t.unchecked||0).toLocaleString()}</strong> unchecked</span>
-      <span class="summary-item"><strong class="c-amber">${t.blacklist_short||0}</strong> blacklist-short</span>
-      <span class="summary-item"><strong class="c-bad">${t.blacklist_permanent||0}</strong> blacklist-perm</span>
-    `;
+      <span class="summary-item"><strong>${(t.total_providers || 0).toLocaleString()}</strong> providers</span>
+      <span class="summary-item"><strong>${(t.total_streams || 0).toLocaleString()}</strong> total streams</span>
+      <span class="summary-item"><strong class="c-ok">${(t.working || 0).toLocaleString()}</strong> working</span>
+      <span class="summary-item"><strong class="c-bad">${(t.failed || 0).toLocaleString()}</strong> failed</span>
+      <span class="summary-item"><strong class="c-purple">${(t.unchecked || 0).toLocaleString()}</strong> unchecked</span>
+      <span class="summary-item"><strong class="c-amber">${t.blacklist_short || 0}</strong> short</span>
+      <span class="summary-item"><strong class="c-bad">${t.blacklist_permanent || 0}</strong> perm</span>`;
     document.getElementById('resultCount').textContent =
-      `Showing ${rows.length} of ${data.total} providers (page ${data.page}/${data.total_pages})`;
-
-    const tb = document.querySelector('#providers tbody');
-    tb.innerHTML = rows.map(r => {
-      const healthParts = [];
-      if (r.healthy) healthParts.push(`<span class="chip chip-healthy" title="Healthy">${r.healthy}</span>`);
-      if (r.medium) healthParts.push(`<span class="chip chip-medium" title="Medium">${r.medium}</span>`);
-      if (r.slow) healthParts.push(`<span class="chip chip-slow" title="Slow">${r.slow}</span>`);
-
-      const blParts = [];
-      if (r.blacklist_short) blParts.push(`<span class="chip chip-bs" title="Short blacklist">${r.blacklist_short}</span>`);
-      if (r.blacklist_permanent) blParts.push(`<span class="chip chip-bp" title="Permanent blacklist">${r.blacklist_permanent}</span>`);
-
-      return `<tr>
-        <td><a href="/streams?provider=${encodeURIComponent(r.domain)}" class="prov-link" title="View streams for ${esc(r.domain)}">${esc(r.domain)}</a></td>
-        <td><span class="chip chip-total">${r.total_streams}</span></td>
-        <td class="ta-c"><span class="chip chip-working">${r.working}</span></td>
-        <td class="ta-c"><span class="chip chip-failed">${r.failed}</span></td>
-        <td class="ta-c"><span class="chip chip-unchecked">${r.unchecked}</span></td>
-        <td class="ta-c"><div class="provider-stats">${healthParts.join('') || '<span class="chip chip-dim">-</span>'}</div></td>
-        <td class="ta-c"><div class="provider-stats">${blParts.join('') || '<span class="chip chip-dim">-</span>'}</div></td>
-        <td class="${r.enabled ? 'state-enabled' : 'state-disabled'}">${r.enabled ? 'ENABLED' : 'DISABLED'}</td>
-        <td class="reason">${esc(r.disabled_reason || '')}</td>
-        <td>${r.enabled
-          ? `<button class="action-btn btn-disable" data-idx="${rows.indexOf(r)}" onclick="disable(this)">Disable</button>`
-          : `<button class="action-btn btn-enable" data-idx="${rows.indexOf(r)}" onclick="enable(this)">Enable</button>`}</td>
-      </tr>`;
-    }).join('');
-
-    renderPagination(data.total_pages, data.page);
+      `Showing ${data.providers.length} of ${data.total} providers (page ${data.page}/${data.total_pages})`;
+    return { rows: data.providers };
   });
 }
 
-function renderPagination(totalPages, current) {
-  const el = document.getElementById('pagination');
+const table = new DataTable({
+  el: '#providers-slot',
+  searchable: false,
+  pageSize: 0,
+  sortable: false,
+  columns: [
+    { key: 'domain', label: 'Provider', sortable: false, render: (r) =>
+        `<a href="/streams?provider=${encodeURIComponent(r.domain)}" class="prov-link" title="View streams for ${esc(r.domain)}">${esc(r.domain)}</a>` },
+    { key: 'total_streams', label: 'Streams', cls: 'center', sortable: false, render: (r) => `<span class="chip chip-total">${r.total_streams}</span>` },
+    { key: 'working', label: 'Working', cls: 'center', sortable: false, render: (r) => `<span class="chip chip-working">${r.working}</span>` },
+    { key: 'failed', label: 'Failed', cls: 'center', sortable: false, render: (r) => `<span class="chip chip-failed">${r.failed}</span>` },
+    { key: 'unchecked', label: 'Unchecked', cls: 'center', sortable: false, render: (r) => `<span class="chip chip-unchecked">${r.unchecked}</span>` },
+    { key: '_health', label: 'Health', cls: 'center', sortable: false, render: (r) => {
+        const parts = [];
+        if (r.healthy) parts.push(`<span class="chip chip-healthy" title="Healthy">${r.healthy}</span>`);
+        if (r.medium) parts.push(`<span class="chip chip-medium" title="Medium">${r.medium}</span>`);
+        if (r.slow) parts.push(`<span class="chip chip-slow" title="Slow">${r.slow}</span>`);
+        return `<div class="provider-stats">${parts.join('') || '<span class="chip chip-dim">-</span>'}</div>`;
+      } },
+    { key: '_bl', label: 'Blacklist', cls: 'center', sortable: false, render: (r) => {
+        const parts = [];
+        if (r.blacklist_short) parts.push(`<span class="chip chip-bs" title="Short blacklist">${r.blacklist_short}</span>`);
+        if (r.blacklist_permanent) parts.push(`<span class="chip chip-bp" title="Permanent blacklist">${r.blacklist_permanent}</span>`);
+        return `<div class="provider-stats">${parts.join('') || '<span class="chip chip-dim">-</span>'}</div>`;
+      } },
+    { key: 'enabled', label: 'State', sortable: false, render: (r) => stateText(r.enabled) },
+    { key: 'disabled_reason', label: 'Reason', sortable: false, render: (r) => `<span class="reason">${esc(r.disabled_reason || '')}</span>` },
+    { key: '_action', label: 'Action', sortable: false, render: (r) =>
+        r.enabled
+          ? `<button class="action-btn btn-disable" data-idx="${_providers.indexOf(r)}" onclick="disable(this)">Disable</button>`
+          : `<button class="action-btn btn-enable" data-idx="${_providers.indexOf(r)}" onclick="enable(this)">Enable</button>` },
+  ],
+  fetch: () => loadProviders(_currentPage),
+  onLoad: (rows) => renderPager(),
+});
+
+function renderPager() {
+  const el = document.querySelector('#providers-slot .pagination');
+  if (!el || !_pager) return;
+  const totalPages = _pager.totalPages;
   if (totalPages <= 1) { el.innerHTML = ''; return; }
-  let html = '';
-  html += `<button ${current<=1?'disabled':''} onclick="loadProviders(${current-1})">&laquo; Prev</button>`;
-  const start = Math.max(1, current - 3);
-  const end = Math.min(totalPages, current + 3);
-  if (start > 1) html += `<button onclick="loadProviders(1)">1</button>`;
-  if (start > 2) html += `<span>...</span>`;
-  for (let i = start; i <= end; i++) {
-    html += `<button class="${i===current?'active':''}" onclick="loadProviders(${i})">${i}</button>`;
-  }
-  if (end < totalPages - 1) html += `<span>...</span>`;
-  if (end < totalPages) html += `<button onclick="loadProviders(${totalPages})">${totalPages}</button>`;
-  html += `<button ${current>=totalPages?'disabled':''} onclick="loadProviders(${current+1})">Next &raquo;</button>`;
+  const cur = _pager.page;
+  const btn = (label, p, cls, disabled) =>
+    `<button ${disabled ? 'disabled' : ''} class="${cls || ''}" data-pg="${p}">${label}</button>`;
+  let html = btn('« Prev', cur - 1, '', cur <= 1);
+  const start = Math.max(1, cur - 3);
+  const end = Math.min(totalPages, cur + 3);
+  if (start > 1) html += btn('1', 1);
+  if (start > 2) html += `<span>…</span>`;
+  for (let i = start; i <= end; i++) html += btn(String(i), i, i === cur ? 'active' : '');
+  if (end < totalPages - 1) html += `<span>…</span>`;
+  if (end < totalPages) html += btn(String(totalPages), totalPages);
+  html += btn('Next »', cur + 1, '', cur >= totalPages);
   el.innerHTML = html;
+  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    _currentPage = +b.dataset.pg;
+    table.reload();
+  }));
 }
 
 function disable(btn) {
   const d = _providers[+btn.dataset.idx].domain;
-  apiPost('/api/provider/disable', {domain:d, reason:'web'}).then(() => loadProviders(currentPage));
+  apiPost('/api/provider/disable', { domain: d, reason: 'web' }).then(() => { toast('disabled ' + d); table.reload(); });
 }
 function enable(btn) {
   const d = _providers[+btn.dataset.idx].domain;
-  apiPost('/api/provider/enable', {domain:d}).then(() => loadProviders(currentPage));
+  apiPost('/api/provider/enable', { domain: d }).then(() => { toast('enabled ' + d); table.reload(); });
 }
 
-document.getElementById('providerSearch').addEventListener('input', debounce(() => loadProviders(1), 300));
-document.getElementById('filterState').addEventListener('change', () => loadProviders(1));
-document.getElementById('sortBy').addEventListener('change', () => loadProviders(1));
-
-loadProviders(1);
+document.getElementById('providerSearch').addEventListener('input', debounce(() => { _currentPage = 1; table.reload(); }, 300));
+document.getElementById('filterState').addEventListener('change', () => { _currentPage = 1; table.reload(); });
+document.getElementById('sortBy').addEventListener('change', () => { _currentPage = 1; table.reload(); });
+table.reload();
 </script>
 {% endblock %}

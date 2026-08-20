@@ -1,26 +1,38 @@
 {% extends "base.html" %}
 {% block title %}Settings{% endblock %}
+{% block body_attr %} data-page="settings"{% endblock %}
 {% block content %}
-<h1>Settings</h1>
-<h2>Generate output</h2>
-<div class="filters">
-  <label><input type="checkbox" id="f_vlc" checked> VLC (.m3u)</label>
-  <label><input type="checkbox" id="f_kodi" checked> Kodi (.kodi.m3u)</label>
-  <label><input type="checkbox" id="f_tivimate" checked> TiviMate (.tivimate.m3u)</label>
-  <button onclick="generate()">Generate</button>
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <div class="sub">Generate playlists and inspect the effective config.</div>
+  </div>
 </div>
-<div id="gen" class="muted"></div>
+
+<h2>Generate output</h2>
+<div class="box">
+  <label class="chk"><input type="checkbox" id="f_vlc" checked> VLC (.m3u)</label>
+  <label class="chk"><input type="checkbox" id="f_kodi" checked> Kodi (.kodi.m3u)</label>
+  <label class="chk"><input type="checkbox" id="f_tivimate" checked> TiviMate (.tivimate.m3u)</label>
+  <button id="gen-btn">Generate</button>
+  <span id="gen" class="msg"></span>
+</div>
+
 <h2>Effective config</h2>
 <pre>{{ cfg | tojson(indent=2) }}</pre>
+{% endblock %}
+{% block scripts %}
 <script>
-function generate(){
-  const fm=[];
-  if(document.getElementById('f_vlc').checked) fm.push('vlc');
-  if(document.getElementById('f_kodi').checked) fm.push('kodi');
-  if(document.getElementById('f_tivimate').checked) fm.push('tivimate');
-  apiPost('/api/generate',{formats:fm}).then(j=>{
-      document.getElementById('gen').textContent=JSON.stringify(j.files,null,2);
-    });
+function generate() {
+  const fm = [];
+  if (document.getElementById('f_vlc').checked) fm.push('vlc');
+  if (document.getElementById('f_kodi').checked) fm.push('kodi');
+  if (document.getElementById('f_tivimate').checked) fm.push('tivimate');
+  apiPost('/api/generate', { formats: fm }).then(j => {
+    document.getElementById('gen').textContent = JSON.stringify(j.files, null, 2);
+    toast('Playlists generated');
+  }).catch(e => { toast('Generate failed', false); });
 }
+document.getElementById('gen-btn').addEventListener('click', generate);
 </script>
 {% endblock %}

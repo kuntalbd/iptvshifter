@@ -1,225 +1,201 @@
 {% extends "base.html" %}
 {% block title %}Streams{% endblock %}
+{% block body_attr %} data-page="streams"{% endblock %}
 {% block content %}
-<h1>Streams</h1>
-<div class="filters">
-  <input id="q" placeholder="search name / url" oninput="loadStreams()">
-  <select id="tier" onchange="loadStreams()">
-    <option value="">all tiers</option>
-    <option value="none">none</option>
-    <option value="short">short</option>
-    <option value="permanent">permanent</option>
-  </select>
-  <select id="working" onchange="loadStreams()">
-    <option value="">any</option>
-    <option value="1">working</option>
-    <option value="0">not working</option>
-  </select>
-  <select id="health" onchange="loadStreams()">
-    <option value="">any health</option>
-    <option value="healthy">healthy</option>
-    <option value="medium">medium</option>
-    <option value="slow">slow</option>
-    <option value="unknown">unmeasured</option>
-  </select>
-  <input id="providerFilter" placeholder="provider" oninput="loadStreams()">
-  <select id="sortField" onchange="loadStreams()">
-    <option value="name">sort: name</option>
-    <option value="provider">sort: provider</option>
-    <option value="health_score">sort: health</option>
-    <option value="total_failures">sort: total fail</option>
-    <option value="consecutive_failures">sort: consec fail</option>
-    <option value="total_pass">sort: total pass</option>
-    <option value="last_checked">sort: last checked</option>
-    <option value="last_working">sort: last working</option>
-  </select>
-  <label><input type="checkbox" id="sortAsc" onchange="loadStreams()"> asc</label>
+<div class="page-head">
+  <div>
+    <h1>Streams</h1>
+    <div class="sub">Search, filter, sort and batch-edit the stream library.</div>
+  </div>
 </div>
 
-<div id="batch-box" class="box hidden" style="margin-bottom:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+<div class="toolbar">
+  <div class="field"><span>Search</span><input id="q" type="search" placeholder="name / url"></div>
+  <div class="field"><span>Tier</span>
+    <select id="tier">
+      <option value="">all tiers</option>
+      <option value="none">none</option>
+      <option value="short">short</option>
+      <option value="permanent">permanent</option>
+    </select>
+  </div>
+  <div class="field"><span>Working</span>
+    <select id="working">
+      <option value="">any</option>
+      <option value="1">working</option>
+      <option value="0">not working</option>
+    </select>
+  </div>
+  <div class="field"><span>Health</span>
+    <select id="health">
+      <option value="">any health</option>
+      <option value="healthy">healthy</option>
+      <option value="medium">medium</option>
+      <option value="slow">slow</option>
+      <option value="unknown">unmeasured</option>
+    </select>
+  </div>
+  <div class="spacer"></div>
+  <span id="result-count" class="muted-sm"></span>
+</div>
+
+<div id="batch-box" class="box hidden">
   <span id="sel-count" class="muted-sm">0 selected</span>
-  <button class="btn" onclick="batchAddFavorite()">★ Add to Favorites</button>
-  <button class="btn" onclick="batchRemoveFavorite()">☆ Remove from Favorites</button>
+  <button class="btn" id="batch-add-fav">★ Add to Favorites</button>
+  <button class="btn" id="batch-remove-fav">☆ Remove from Favorites</button>
   <select id="batch-tier">
-    <option value="">blacklist tier...</option>
+    <option value="">blacklist tier…</option>
     <option value="none">none</option>
     <option value="short">short</option>
     <option value="permanent">permanent</option>
   </select>
-  <button class="btn" onclick="batchSetBlacklist()">Set Tier</button>
+  <button class="btn" id="batch-blacklist">Set Tier</button>
 </div>
 
-<div style="display:flex; gap:1rem; align-items:flex-start;">
-  <table class="tbl" id="streams" style="flex:1;">
-    <thead><tr>
-      <th style="width:30px"><input type="checkbox" id="sel-all" onchange="selAll(this)"></th>
-      <th style="width:30px; text-align:center;">★</th>
-      <th class="sortable" data-col="name">Name</th>
-      <th class="sortable" data-col="provider">Provider</th>
-      <th class="sortable" data-col="tier">Tier</th>
-      <th class="sortable" data-col="health_score">Health</th>
-      <th class="sortable" data-col="working">Working</th>
-      <th class="sortable" data-col="last_checked">Checked</th>
-      <th class="sortable" data-col="last_working">Last Working</th>
-      <th class="sortable" data-col="total_failures">Total Fail</th>
-      <th class="sortable" data-col="consecutive_failures">Consec Fail</th>
-      <th class="sortable" data-col="total_pass">Total Pass</th>
-      <th class="sortable" data-col="consecutive_pass">Consec Pass</th>
-    </tr></thead>
-    <tbody></tbody>
-  </table>
-  <aside id="detail" class="detail" style="width:340px;"></aside>
+<div id="streams-area" style="display:flex; gap:1rem; align-items:flex-start;">
+  <div id="streams-slot" style="flex:1; min-width:0;"></div>
+  <div id="detail" class="detail hidden" style="width:340px; flex-shrink:0;"></div>
 </div>
-
+{% endblock %}
+{% block scripts %}
 <script>
-const ICON={healthy:'⭐',medium:'⚠️',slow:'🐢',unknown:'?'};
-const COL_KEY={name:'name',provider:'provider_domain',tier:'blacklist_tier',
-  health_score:'health_score',working:'is_working',last_checked:'last_checked',
-  last_working:'last_working',total_failures:'total_failures',
-  consecutive_failures:'consecutive_failures',total_pass:'total_pass',
-  consecutive_pass:'consecutive_pass'};
-let _rows=[];
+const ICON = { healthy: '⭐', medium: '⚠️', slow: '🐢', unknown: '?' };
+let _rows = [];
+let _sel = [];
 
-function loadStreams(){
-  const q=document.getElementById('q').value;
-  const tier=document.getElementById('tier').value;
-  const working=document.getElementById('working').value;
-  const health=document.getElementById('health').value;
-  const u=`/api/streams?q=${encodeURIComponent(q)}&tier=${tier}&working=${working}&health=${health}&limit=500`;
-  apiGet(u).then(rows=>{
-    _rows=rows;
-    render();
+function loadStreams() {
+  const q = document.getElementById('q').value;
+  const tier = document.getElementById('tier').value;
+  const working = document.getElementById('working').value;
+  const health = document.getElementById('health').value;
+  const u = `/api/streams?q=${encodeURIComponent(q)}&tier=${tier}&working=${working}&health=${health}&limit=500`;
+  return apiGet(u);
+}
+
+const table = new DataTable({
+  el: '#streams-slot',
+  selectable: true,
+  pageSize: 50,
+  searchable: true,
+  searchPlaceholder: 'Filter current results…',
+  searchKeys: ['name', 'provider_domain', 'blacklist_tier'],
+  columns: [
+    { key: 'name', label: 'Name', render: (r) => esc(r.name) },
+    { key: 'provider_domain', label: 'Provider', render: (r) =>
+        `<a href="/providers?search=${encodeURIComponent(r.provider_domain)}" class="link" title="View provider details">${esc(r.provider_domain)}</a>` },
+    { key: 'blacklist_tier', label: 'Tier', render: (r) => `<span class="tier-${esc(r.blacklist_tier)}">${esc(r.blacklist_tier)}</span>` },
+    { key: 'health_score', label: 'Health', render: (r) =>
+        `${ICON[r.health_tier] || '?'}${r.health_score != null ? ' ' + Math.round(r.health_score) : ''}` },
+    { key: 'is_working', label: 'Working', render: (r) => checkmark(r.is_working) },
+    { key: 'last_checked', label: 'Checked', render: (r) => `<span title="${esc(r.last_checked || '')}">${fmtDate(r.last_checked)}</span>` },
+    { key: 'last_working', label: 'Last Working', render: (r) => `<span title="${esc(r.last_working || '')}">${fmtDate(r.last_working)}</span>` },
+    { key: 'total_failures', label: 'Total Fail', cls: 'num', render: (r) => `<span class="${r.total_failures > 0 ? 'tier-short' : ''}">${r.total_failures || 0}</span>` },
+    { key: 'consecutive_failures', label: 'Consec Fail', cls: 'num', render: (r) => `<span class="${r.consecutive_failures > 0 ? 'tier-short' : ''}">${r.consecutive_failures || 0}</span>` },
+    { key: 'total_pass', label: 'Total Pass', cls: 'num', render: (r) => `<span class="${r.total_pass > 0 ? 'on' : ''}">${r.total_pass || 0}</span>` },
+    { key: 'consecutive_pass', label: 'Consec Pass', cls: 'num', render: (r) => `<span class="${r.consecutive_pass > 0 ? 'on' : ''}">${r.consecutive_pass || 0}</span>` },
+  ],
+  fetch: () => loadStreams().then(rows => { _rows = rows; return rows; }),
+  onLoad: (rows) => { document.getElementById('result-count').textContent = rows.length + ' streams'; },
+  onSelChange: (rows) => {
+    _sel = rows;
+    const el = document.getElementById('sel-count');
+    const box = document.getElementById('batch-box');
+    el.textContent = rows.length + ' selected';
+    box.classList.toggle('hidden', rows.length === 0);
+  },
+  rowClick: (r) => showDetail(r),
+  selData: (r) => ({ id: r.id, url: r.url, favorite_id: r.favorite_id || 0 }),
+});
+
+function selectedUrls() { return _sel.map(r => r.url); }
+function selectedFavIds() { return _sel.map(r => r.favorite_id || 0).filter(x => x > 0); }
+function selectedIds() { return _sel.map(r => r.id); }
+
+function toggleFav(streamId) {
+  const r = _rows.find(x => x.id === streamId); if (!r) return;
+  apiPost('/api/favorites/toggle', { url: r.url }).then(d => {
+    if (d.ok) {
+      toast(d.action === 'added' ? '★ Added to favorites' : '☆ Removed from favorites');
+      table.reload();
+    } else toast('error: ' + (d.error || ''), false);
   });
 }
 
-function render(){
-  const pf=(document.getElementById('providerFilter').value||'').toLowerCase();
-  const sf=document.getElementById('sortField').value;
-  const asc=document.getElementById('sortAsc').checked;
-  const ck=COL_KEY[sf]||sf;
-  let data=_rows;
-  if(pf) data=data.filter(r=>(r.provider_domain||'').toLowerCase().includes(pf));
-  data.sort((a,b)=>{
-    let av=a[ck],bv=b[ck];
-    if(av==null) av=''; if(bv==null) bv='';
-    if(typeof av==='number' && typeof bv==='number') return asc?av-bv:bv-av;
-    av=String(av).toLowerCase(); bv=String(bv).toLowerCase();
-    return asc?av.localeCompare(bv):bv.localeCompare(av);
+function batchAddFavorite() {
+  const urls = selectedUrls(); if (!urls.length) return;
+  apiPost('/api/favorites/batch-add', { urls }).then(d => {
+    toast(d.ok ? `★ ${d.added} added to favorites` : ('error: ' + (d.error || '')));
+    table.reload();
   });
-  const tb=document.querySelector('#streams tbody');
-  tb.innerHTML=data.map(r=>`<tr data-id="${r.id}">
-    <td><input type="checkbox" class="sel" data-id="${r.id}" data-url="${esc(r.url)}" data-fav="${r.favorite_id||0}"></td>
-    <td style="text-align:center; cursor:pointer; font-size:1.2em;" onclick="toggleFav(${r.id})" title="${r.is_favorite?'Remove from favorites':'Add to favorites'}">${r.is_favorite?'★':'☆'}</td>
-    <td onclick="showDetail(${r.id})">${esc(r.name)}</td>
-    <td><a href="/providers?search=${encodeURIComponent(r.provider_domain)}" class="link" title="View provider details">${esc(r.provider_domain)}</a></td>
-    <td class="tier-${r.blacklist_tier}">${r.blacklist_tier}</td>
-    <td>${ICON[r.health_tier]||'?'}${r.health_score!=null?(' '+Math.round(r.health_score)):''}</td>
-    <td>${r.is_working===1?'✔':(r.is_working===0?'✘':'?')}</td>
-    <td title="${r.last_checked||''}">${fmtDate(r.last_checked)}</td>
-    <td title="${r.last_working||''}">${fmtDate(r.last_working)}</td>
-    <td class="${r.total_failures>0?'warn':''}">${r.total_failures||0}</td>
-    <td class="${r.consecutive_failures>0?'warn':''}">${r.consecutive_failures||0}</td>
-    <td class="${r.total_pass>0?'ok':''}">${r.total_pass||0}</td>
-    <td class="${r.consecutive_pass>0?'ok':''}">${r.consecutive_pass||0}</td></tr>`).join('');
-  refreshSelCount();
 }
-
-function selectedUrls(){return [...document.querySelectorAll('.sel:checked')].map(c=>c.dataset.url);}
-function selectedFavIds(){return [...document.querySelectorAll('.sel:checked')].map(c=>+c.dataset.fav || 0).filter(x=>x>0);}
-
-function toggleFav(streamId){
-  const r=_rows.find(x=>x.id===streamId); if(!r) return;
-  apiPost('/api/favorites/toggle',{url:r.url}).then(d=>{
-    if(d.ok){
-      toast(d.action==='added'?'★ Added to favorites':'☆ Removed from favorites');
-      loadStreams();
-    } else toast('error: '+(d.error||''));
+function batchRemoveFavorite() {
+  const ids = selectedFavIds(); if (!ids.length) return toast('No favorites selected', false);
+  apiPost('/api/favorites/batch-remove', { ids }).then(d => {
+    toast(d.ok ? `☆ ${d.removed} removed from favorites` : ('error: ' + (d.error || '')));
+    table.reload();
+  });
+}
+function batchSetBlacklist() {
+  const ids = selectedIds();
+  const tier = document.getElementById('batch-tier').value;
+  if (!ids.length) return toast('select streams first', false);
+  if (!tier) return toast('select a tier', false);
+  apiPost('/api/streams/batch-blacklist', { ids, tier }).then(d => {
+    toast(d.ok ? `Updated ${d.updated} streams to ${tier}` : ('error: ' + (d.error || '')));
+    table.reload();
   });
 }
 
-function batchAddFavorite(){
-  const urls=selectedUrls(); if(!urls.length) return;
-  apiPost('/api/favorites/batch-add',{urls}).then(d=>{
-    toast(d.ok?`★ ${d.added} added to favorites`:('error: '+(d.error||'')));
-    loadStreams();
-  });
-}
-
-function batchRemoveFavorite(){
-  const ids=selectedFavIds(); if(!ids.length) return toast('No favorites selected');
-  apiPost('/api/favorites/batch-remove',{ids}).then(d=>{
-    toast(d.ok?`☆ ${d.removed} removed from favorites`:('error: '+(d.error||'')));
-    loadStreams();
-  });
-}
-
-function batchSetBlacklist(){
-  const ids=selectedIds();
-  const tier=document.getElementById('batch-tier').value;
-  if(!ids.length) return alert('select streams first');
-  if(!tier) return alert('select a tier');
-  apiPost('/api/streams/batch-blacklist',{ids,tier}).then(d=>{
-    toast(d.ok?`Updated ${d.updated} streams to ${tier}`:('error: '+(d.error||'')));
-    loadStreams();
-  });
-}
-
-function showDetail(id){
-  const r=_rows.find(x=>x.id===id); if(!r) return;
-  const d=document.getElementById('detail');
-  d.innerHTML=`<h3>${esc(r.name)}</h3>
+function showDetail(r) {
+  const d = document.getElementById('detail');
+  d.classList.remove('hidden');
+  d.innerHTML = `<h3>${esc(r.name)}</h3>
     <div class="kv"><span>Provider</span><b><a href="/providers?search=${encodeURIComponent(r.provider_domain)}" class="link">${esc(r.provider_domain)}</a></b></div>
-    <div class="kv"><span>Tier</span><b>${r.blacklist_tier}</b></div>
-    <div class="kv"><span>Health</span><b>${ICON[r.health_tier]||'?'} ${r.health_score!=null?Math.round(r.health_score):'-'}</b></div>
-    <div class="kv"><span>Working</span><b>${r.is_working===1?'Yes':(r.is_working===0?'No':'Unknown')}</b></div>
+    <div class="kv"><span>Tier</span><b>${esc(r.blacklist_tier)}</b></div>
+    <div class="kv"><span>Health</span><b>${ICON[r.health_tier] || '?'} ${r.health_score != null ? Math.round(r.health_score) : '-'}</b></div>
+    <div class="kv"><span>Working</span><b>${r.is_working === 1 ? 'Yes' : (r.is_working === 0 ? 'No' : 'Unknown')}</b></div>
     <div class="kv"><span>Checked</span><b>${fmtDate(r.last_checked)}</b></div>
     <div class="kv"><span>Last Working</span><b>${fmtDate(r.last_working)}</b></div>
-    <div class="kv"><span>Total Fail</span><b>${r.total_failures||0}</b></div>
-    <div class="kv"><span>Consec Fail</span><b>${r.consecutive_failures||0}</b></div>
-    <div class="kv"><span>Total Pass</span><b>${r.total_pass||0}</b></div>
-    <div class="kv"><span>Consec Pass</span><b>${r.consecutive_pass||0}</b></div>
-    <div class="urlbox"><code>${esc(r.original_url||r.url)}</code>
+    <div class="kv"><span>Total Fail</span><b>${r.total_failures || 0}</b></div>
+    <div class="kv"><span>Consec Fail</span><b>${r.consecutive_failures || 0}</b></div>
+    <div class="kv"><span>Total Pass</span><b>${r.total_pass || 0}</b></div>
+    <div class="kv"><span>Consec Pass</span><b>${r.consecutive_pass || 0}</b></div>
+    <div class="urlbox"><code>${esc(r.original_url || r.url)}</code>
       <button onclick="copyUrl(this)">copy</button></div>
-    <div style="display:flex; gap:6px; margin-top:8px;">
-      <button class="btn" onclick="toggleFav(${r.id});showDetail(${r.id})">${r.is_favorite?'☆ Remove favorite':'★ Add favorite'}</button>
-      <button class="btn danger" onclick="disableProvider(${r.id})">disable provider</button>
-    </div>
-    <button class="btn" style="margin-top:8px;" onclick="document.getElementById('detail').innerHTML=''">close</button>`;
+    <div class="row-actions">
+      <button class="btn" onclick="toggleFav(${r.id});showDetail(${r.id})">${r.is_favorite ? '☆ Remove favorite' : '★ Add favorite'}</button>
+      <button class="btn" onclick="disableProvider(${r.id})">disable provider</button>
+      <button class="btn" onclick="document.getElementById('detail').classList.add('hidden')">close</button>
+    </div>`;
 }
-function copyUrl(btn){
-  const url=btn.parentElement.querySelector('code').textContent;
-  navigator.clipboard.writeText(url).then(()=>{btn.textContent='copied!';setTimeout(()=>btn.textContent='copy',1200);});
+function copyUrl(btn) {
+  const url = btn.parentElement.querySelector('code').textContent;
+  navigator.clipboard.writeText(url).then(() => { btn.textContent = 'copied!'; setTimeout(() => btn.textContent = 'copy', 1200); });
 }
-function disableProvider(streamId){
-  const r=_rows.find(x=>x.id===streamId); if(!r) return;
-  if(!confirm('Disable provider '+r.provider_domain+'?')) return;
-  apiPost('/api/provider/disable',{domain:r.provider_domain,reason:'web'}).then(()=>{toast('disabled '+r.provider_domain);loadStreams();});
+function disableProvider(streamId) {
+  const r = _rows.find(x => x.id === streamId); if (!r) return;
+  if (!confirmDialog('Disable provider ' + r.provider_domain + '?')) return;
+  apiPost('/api/provider/disable', { domain: r.provider_domain, reason: 'web' }).then(() => { toast('disabled ' + r.provider_domain); table.reload(); });
 }
 
-// sortable headers
-document.querySelectorAll('.sortable').forEach(th=>{
-  th.style.cursor='pointer';
-  th.addEventListener('click',()=>{
-    const col=th.dataset.col;
-    const cur=document.getElementById('sortField').value;
-    const curCk=COL_KEY[cur]||cur;
-    const asc=document.getElementById('sortAsc');
-    if(curCk===col){ asc.checked=!asc.checked; }
-    else{
-      const sel=document.getElementById('sortField');
-      for(const opt of sel.options){ if(opt.value===col){ sel.value=col; break; } }
-      asc.checked=true;
-    }
-    loadStreams();
-  });
+document.getElementById('batch-add-fav').addEventListener('click', batchAddFavorite);
+document.getElementById('batch-remove-fav').addEventListener('click', batchRemoveFavorite);
+document.getElementById('batch-blacklist').addEventListener('click', batchSetBlacklist);
+
+['q', 'tier', 'working', 'health'].forEach(id => {
+  const el = document.getElementById(id);
+  const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+  const fn = () => table.reload();
+  if (evt === 'input') el.addEventListener(evt, debounce(fn, 300));
+  else el.addEventListener(evt, fn);
 });
 
 // honor deep links
-const p=new URLSearchParams(location.search);
-if(p.get('health')) document.getElementById('health').value=p.get('health');
-if(p.get('working')) document.getElementById('working').value=p.get('working');
-if(p.get('tier')) document.getElementById('tier').value=p.get('tier');
-if(p.get('provider')) document.getElementById('providerFilter').value=p.get('provider');
-loadStreams();
+const p = new URLSearchParams(location.search);
+if (p.get('health')) document.getElementById('health').value = p.get('health');
+if (p.get('working')) document.getElementById('working').value = p.get('working');
+if (p.get('tier')) document.getElementById('tier').value = p.get('tier');
+if (p.get('provider')) table.setSearch(p.get('provider'));
+table.reload();
 </script>
 {% endblock %}
