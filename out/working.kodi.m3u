@@ -7490,7 +7490,7 @@ https://reflect-fcpublicmedia.cablecast.tv/live-5/live/stream-1/live.m3u8
 https://amg00627-banijaygroup-fearfactor-samsungau-9vdod.amagi.tv/playlist/amg00627-banijaygroup-fearfactor-samsungau/playlist.m3u8
 #EXTINF:-1 tvg-id="FehervarTV.hu@SD" tvg-logo="https://www.fehervartv.hu/css/img/icon-1-2.png" group-title="⚠️ Entertainment",Fehérvár TV (360p)
 #KODIPROP:inputstream.adaptive.stream_headers=
-https://cloudfront44.lexanetwork.com:1344/freerelay/fehervartv.sdp/playlist.m3u8?key=EWSj2
+https://cloudfront44.lexanetwork.com:1344/freerelay/fehervartv.sdp/playlist.m3u8
 #EXTINF:-1 tvg-id="FemeninaTV.do@HD" tvg-logo="https://www.vivalivetv.com/public/files/shows/0/1/3802-294x165-FFFFFF.jpg" group-title="⭐ Entertainment",Femenina TV
 #KODIPROP:inputstream.adaptive.stream_headers=
 https://streamunoapp.com:3511/live/femeninatvlive.m3u8
@@ -15845,7 +15845,7 @@ http://210.4.72.204/hls-live/livepkgr/_definst_/liveevent/livestream3.m3u8
 http://str24.l9574.com/510.stream/index.m3u8
 #EXTINF:-1 tvg-logo="https://yt3.ggpht.com/ytc/AAUvwnjwGg2XyMGxFITXm_54WBnNF_zBYcYw9n1E_PlCxoo=s900-c-k-c0x00ffffff-no-rj" group-title="⭐ Bangladesh",43.KTV Bangla
 #KODIPROP:inputstream.adaptive.stream_headers=
-https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?token=soheliptv01826655778
+https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?@ShamimHossainOfficial
 #EXTINF:-1 group-title="⭐ Bangladesh",54.52 TV
 #KODIPROP:inputstream.adaptive.stream_headers=
 http://str24.l9574.com/503.stream/index.m3u8
@@ -16308,7 +16308,7 @@ https://stream.ads.ottera.tv/playlist.m3u8?content_livestream=1&network_id=16206
 https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc4us/master.m3u8
 #EXTINF:-1 tvg-logo="https://origin-staticv2.sonyliv.com/videoasset_images/manage_file/1000021741/1785702497412697_LIV_Golf_Indianapolis_day4_landscape_thumb.jpg" group-title="⭐ India",Indianapolis - Day 4 - 23 Aug 2026 [ENG] - LIV Golf
 #KODIPROP:inputstream.adaptive.stream_headers=
-https://sonydaimenew.akamaized.net/hls/live/2022320/LIVGolf_2308/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787555108~acl=/*~id=00360524259542360643972446100726~hmac=efa5e0d3599c6aca7e6bf091470e974b8d3e3a8bacebfb343ef00f43dfe86f8c
+https://sonydaimenew.akamaized.net/hls/live/2022320/LIVGolf_2308/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787561189~acl=/*~id=03608294813271714874269809564621~hmac=72d6096713d65ac344c4a365be6554b5200b675df518a1490afbc8ad212d21c6
 #EXTINF:-1 tvg-logo="https://origin-staticv2.sonyliv.com/videoasset_images/manage_file/1000021741/1785702497412697_LIV_Golf_Indianapolis_day4_landscape_thumb.jpg" group-title="⭐ India",Indianapolis - Day 4 - 23 Aug 2026 [ENG] - LIV Golf
 #KODIPROP:inputstream.adaptive.stream_headers=
 https://sonydaimenew.akamaized.net/hls/live/2022320/LIVGolf_2308/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787557538~acl=/*~id=95086079251256893507551583728866~hmac=99acaf2f480bd6beb5709ee8c7bc90788593d586322bf02317e670fce336e4fd

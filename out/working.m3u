@@ -5144,7 +5144,7 @@ https://reflect-fcpublicmedia.cablecast.tv/live-5/live/stream-1/live.m3u8
 #EXTINF:-1 tvg-id="FearFactor.us@US" tvg-logo="https://i.imgur.com/CIYnLWz.png" group-title="⭐ Entertainment",Fear Factor (1080p)
 https://amg00627-banijaygroup-fearfactor-samsungau-9vdod.amagi.tv/playlist/amg00627-banijaygroup-fearfactor-samsungau/playlist.m3u8
 #EXTINF:-1 tvg-id="FehervarTV.hu@SD" tvg-logo="https://www.fehervartv.hu/css/img/icon-1-2.png" group-title="⚠️ Entertainment",Fehérvár TV (360p)
-https://cloudfront44.lexanetwork.com:1344/freerelay/fehervartv.sdp/playlist.m3u8?key=EWSj2
+https://cloudfront44.lexanetwork.com:1344/freerelay/fehervartv.sdp/playlist.m3u8
 #EXTINF:-1 tvg-id="FemeninaTV.do@HD" tvg-logo="https://www.vivalivetv.com/public/files/shows/0/1/3802-294x165-FFFFFF.jpg" group-title="⭐ Entertainment",Femenina TV
 https://streamunoapp.com:3511/live/femeninatvlive.m3u8
 #EXTINF:-1 tvg-id="FilAmTVNetwork.us@HD" tvg-logo="https://i.imgur.com/nRiApdI.png" group-title="⚠️ Entertainment",FilAmTV Network (1080p)
@@ -10782,7 +10782,7 @@ http://210.4.72.204/hls-live/livepkgr/_definst_/liveevent/livestream3.m3u8
 #EXTINF:-1 group-title="⭐ Bangladesh",31.Agami TV
 http://str24.l9574.com/510.stream/index.m3u8
 #EXTINF:-1 tvg-logo="https://yt3.ggpht.com/ytc/AAUvwnjwGg2XyMGxFITXm_54WBnNF_zBYcYw9n1E_PlCxoo=s900-c-k-c0x00ffffff-no-rj" group-title="⭐ Bangladesh",43.KTV Bangla
-https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?token=soheliptv01826655778
+https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?@ShamimHossainOfficial
 #EXTINF:-1 group-title="⭐ Bangladesh",54.52 TV
 http://str24.l9574.com/503.stream/index.m3u8
 #EXTINF:-1 tvg-name="Welcome to PlayZ TV" tvg-logo="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgyniKyW9pUz1OKx5bgzLASwGVSuP0e7hX9FxVMTJMHxhu8X0tpucgSplBZgM8pCYrJJH0P2_dTC1-wzp4mMUU4sKnOzghGPCwWdbYOOa4jTyhpr7ydNj-UK-bc56IMsk2H3WZJ-SzSZIk0dTpyABCFR2_zjC2_c86W1pv7odFBT_Y-hyJs62g-3zCJkPGd/s1024/1000398131.png" group-title="⭐ Bangladesh",[BD] Welcome to PlayZ TV {Sponsored}
@@ -11094,7 +11094,7 @@ https://stream.ads.ottera.tv/playlist.m3u8?content_livestream=1&network_id=16206
 #EXTINF:-1 tvg-id="IntheKitchen.us@SD" tvg-logo="https://i.imgur.com/HrRUd6r.png" group-title="⭐ India",In the kitchen (720p)
 https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc4us/master.m3u8
 #EXTINF:-1 tvg-logo="https://origin-staticv2.sonyliv.com/videoasset_images/manage_file/1000021741/1785702497412697_LIV_Golf_Indianapolis_day4_landscape_thumb.jpg" group-title="⭐ India",Indianapolis - Day 4 - 23 Aug 2026 [ENG] - LIV Golf
-https://sonydaimenew.akamaized.net/hls/live/2022320/LIVGolf_2308/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787555108~acl=/*~id=00360524259542360643972446100726~hmac=efa5e0d3599c6aca7e6bf091470e974b8d3e3a8bacebfb343ef00f43dfe86f8c
+https://sonydaimenew.akamaized.net/hls/live/2022320/LIVGolf_2308/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787561189~acl=/*~id=03608294813271714874269809564621~hmac=72d6096713d65ac344c4a365be6554b5200b675df518a1490afbc8ad212d21c6
 #EXTINF:-1 tvg-logo="https://origin-staticv2.sonyliv.com/videoasset_images/manage_file/1000021741/1785702497412697_LIV_Golf_Indianapolis_day4_landscape_thumb.jpg" group-title="⭐ India",Indianapolis - Day 4 - 23 Aug 2026 [ENG] - LIV Golf
 https://sonydaimenew.akamaized.net/hls/live/2022320/LIVGolf_2308/ENG/std_lrh-800300010.m3u8?hdnea=exp=1787557538~acl=/*~id=95086079251256893507551583728866~hmac=99acaf2f480bd6beb5709ee8c7bc90788593d586322bf02317e670fce336e4fd
 #EXTINF:-1 tvg-logo="https://origin-staticv2.sonyliv.com/videoasset_images/manage_file/1000021741/1785702497412697_LIV_Golf_Indianapolis_day4_landscape_thumb.jpg" group-title="⭐ India",Indianapolis - Day 4 - 23 Aug 2026 [ENG] - LIV Golf
