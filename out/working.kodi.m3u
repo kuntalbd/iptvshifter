@@ -7490,7 +7490,7 @@ https://reflect-fcpublicmedia.cablecast.tv/live-5/live/stream-1/live.m3u8
 https://amg00627-banijaygroup-fearfactor-samsungau-9vdod.amagi.tv/playlist/amg00627-banijaygroup-fearfactor-samsungau/playlist.m3u8
 #EXTINF:-1 tvg-id="FehervarTV.hu@SD" tvg-logo="https://www.fehervartv.hu/css/img/icon-1-2.png" group-title="🐢 Entertainment",Fehérvár TV (360p)
 #KODIPROP:inputstream.adaptive.stream_headers=
-https://cloudfront44.lexanetwork.com:1344/freerelay/fehervartv.sdp/playlist.m3u8?key=EWSj2
+https://cloudfront44.lexanetwork.com:1344/freerelay/fehervartv.sdp/playlist.m3u8
 #EXTINF:-1 tvg-id="FemeninaTV.do@HD" tvg-logo="https://www.vivalivetv.com/public/files/shows/0/1/3802-294x165-FFFFFF.jpg" group-title="⭐ Entertainment",Femenina TV
 #KODIPROP:inputstream.adaptive.stream_headers=
 https://streamunoapp.com:3511/live/femeninatvlive.m3u8
@@ -15836,7 +15836,7 @@ http://210.4.72.204/hls-live/livepkgr/_definst_/liveevent/livestream3.m3u8
 http://str24.l9574.com/510.stream/index.m3u8
 #EXTINF:-1 tvg-logo="https://yt3.ggpht.com/ytc/AAUvwnjwGg2XyMGxFITXm_54WBnNF_zBYcYw9n1E_PlCxoo=s900-c-k-c0x00ffffff-no-rj" group-title="⭐ Bangladesh",43.KTV Bangla
 #KODIPROP:inputstream.adaptive.stream_headers=
-https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?token=soheliptv01826655778
+https://server1.jadubd.com/ktvbangla/ktvbangla/playlist.m3u8?@ShamimHossainOfficial
 #EXTINF:-1 group-title="⭐ Bangladesh",54.52 TV
 #KODIPROP:inputstream.adaptive.stream_headers=
 http://str24.l9574.com/503.stream/index.m3u8
